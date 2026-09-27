@@ -11,24 +11,23 @@ if (!BOT_TOKEN) {
   throw new Error('BOT_TOKEN is missing');
 }
 
-const bot = new TelegramBot(
-  BOT_TOKEN,
-  { polling: true }
-);
+const bot = new TelegramBot(BOT_TOKEN, {
+  polling: true
+});
 
 
 /*
 =========================================================
-/START
+START COMMAND
 =========================================================
 */
 
-bot.onText(/^\/start(?:\s+.*)?$/i, async (msg) => {
+bot.onText(/^\/start(?:\s.*)?$/i, async (msg) => {
 
   const chatId = msg.chat.id;
 
   const firstName =
-    msg.from?.first_name || 'there';
+    msg.from?.first_name || 'User';
 
   try {
 
@@ -39,15 +38,14 @@ bot.onText(/^\/start(?:\s+.*)?$/i, async (msg) => {
 
 💰 Welcome to Adewa.
 
-Complete ads, tasks and surveys
+Complete tasks, surveys and ads
 and earn rewards.
 
-👇 Tap the button below to open Adewa Mini App.`,
+👇 Open the Mini App below:`,
 
       {
         reply_markup: {
           inline_keyboard: [
-
             [
               {
                 text: '🚀 OPEN ADEWA',
@@ -56,7 +54,6 @@ and earn rewards.
                 }
               }
             ]
-
           ]
         }
       }
@@ -65,7 +62,7 @@ and earn rewards.
   } catch (error) {
 
     console.error(
-      'START ERROR:',
+      'Telegram /start error:',
       error
     );
 
@@ -76,28 +73,28 @@ and earn rewards.
 
 /*
 =========================================================
-OPTIONAL /HELP
+BOT STATUS
 =========================================================
 */
 
-bot.onText(/^\/help$/i, async (msg) => {
+bot.getMe()
+  .then((me) => {
 
-  await bot.sendMessage(
-    msg.chat.id,
+    console.log(
+      `Bot connected: @${me.username}`
+    );
 
-    `ℹ️ Adewa Help
+    console.log(
+      'Mini App:',
+      MINI_APP_URL
+    );
 
-Open the Mini App using:
+  })
+  .catch((error) => {
 
-🚀 OPEN ADEWA
+    console.error(
+      'Bot connection error:',
+      error
+    );
 
-Inside the Mini App you can access
-your available tasks and rewards.`
-  );
-
-});
-
-
-console.log(
-  'Adewa Telegram bot is running...'
-);
+  });
