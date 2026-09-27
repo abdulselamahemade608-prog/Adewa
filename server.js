@@ -123,6 +123,12 @@ function initDatabase() {
       BOOLEAN NOT NULL DEFAULT FALSE
     `);
 
+    await pool.query(`
+      ALTER TABLE fraud_users
+      ADD COLUMN IF NOT EXISTS admin_verified
+      BOOLEAN NOT NULL DEFAULT FALSE
+    `);
+
     // -----------------------------------------------------
     // Required channels (admin-managed, not hardcoded)
     // -----------------------------------------------------
@@ -338,14 +344,15 @@ async function banUserById(telegramId, reason) {
   const result = await pool.query(
     `
     INSERT INTO fraud_users (
-      telegram_id, status, ban_reason, last_seen, request_count
+      telegram_id, status, ban_reason, admin_verified, last_seen, request_count
     )
-    VALUES ($1, 'banned', $2, NOW(), 1)
+    VALUES ($1, 'banned', $2, FALSE, NOW(), 1)
 
     ON CONFLICT (telegram_id)
     DO UPDATE SET
       status = 'banned',
       ban_reason = EXCLUDED.ban_reason,
+      admin_verified = FALSE,
       last_seen = NOW()
 
     RETURNING *
@@ -374,6 +381,7 @@ async function unbanUserById(telegramId) {
       proxy_detected = FALSE,
       risk_score = 0,
       ban_message_sent = FALSE,
+      admin_verified = TRUE,
       last_seen = NOW()
     WHERE telegram_id = $1
     RETURNING *
@@ -1476,6 +1484,17 @@ app.post(
       }
 
       // ===================================================
+      // ADMIN-VERIFIED — skip automatic fraud checks.
+      // An account an admin has manually unbanned is trusted
+      // going forward; it should not be auto re-banned just
+      // because it shares a device/IP with another account.
+      // ===================================================
+
+      const alreadyAdminVerified =
+        existing.rows.length > 0 &&
+        existing.rows[0].admin_verified === true;
+
+      // ===================================================
       // MULTI ACCOUNT CHECK — runs FIRST.
       // A normal user might trip the VPN check (mobile
       // carrier NAT, shared wifi, etc.), but two Telegram
@@ -1484,11 +1503,13 @@ app.post(
       // ===================================================
 
       const multiAccount =
-        await detectMultiAccount(
-          telegramId,
-          ipHash,
-          deviceHash
-        );
+        alreadyAdminVerified
+          ? { detected: false, reason: '' }
+          : await detectMultiAccount(
+              telegramId,
+              ipHash,
+              deviceHash
+            );
 
       if (
         multiAccount.detected
@@ -1587,7 +1608,9 @@ app.post(
       // ===================================================
 
       const networkCheck =
-        await detectVPNProxy(ip);
+        alreadyAdminVerified
+          ? { detected: false }
+          : await detectVPNProxy(ip);
 
       if (
         networkCheck.detected
