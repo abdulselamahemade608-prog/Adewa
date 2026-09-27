@@ -20,8 +20,14 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const WEBHOOK_SECRET =
   process.env.WEBHOOK_SECRET || 'adewa_webhook_secret';
 
-const MINI_APP_URL =
+const MINI_APP_URL_BASE =
   'https://abdulselamahemade608-prog.github.io/Adewa-frontend/';
+
+// Cache-buster: changes on every cold start / deploy so Telegram's
+// in-app WebView is forced to fetch the latest file instead of
+// serving a stale cached copy.
+const MINI_APP_URL =
+  `${MINI_APP_URL_BASE}?v=${Date.now()}`;
 
 const WEBHOOK_URL =
   'https://adewa.vercel.app/telegram/webhook';
