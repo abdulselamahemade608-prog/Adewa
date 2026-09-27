@@ -18,7 +18,11 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const MINI_APP_URL =
   'https://abdulselamahemade608-prog.github.io/Adewa-frontend/';
 
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'adewa_webhook_secret';
+const WEBHOOK_SECRET =
+  process.env.WEBHOOK_SECRET || 'adewa_webhook_secret';
+
+const WEBHOOK_URL =
+  'https://adewa.vercel.app/telegram/webhook';
 
 /* =========================================================
    DATABASE
@@ -59,6 +63,36 @@ app.use((req, res, next) => {
 });
 
 /* =========================================================
+   DATABASE INITIALIZATION
+========================================================= */
+
+let databaseReady = null;
+
+function initDatabase() {
+  if (!databaseReady) {
+    databaseReady = pool.query(`
+      CREATE TABLE IF NOT EXISTS fraud_users (
+        telegram_id BIGINT PRIMARY KEY,
+        username TEXT DEFAULT '',
+        first_name TEXT DEFAULT '',
+        ip_hash TEXT DEFAULT '',
+        device_hash TEXT DEFAULT '',
+        vpn_detected BOOLEAN DEFAULT FALSE,
+        proxy_detected BOOLEAN DEFAULT FALSE,
+        risk_score INTEGER DEFAULT 0,
+        status TEXT DEFAULT 'active',
+        ban_reason TEXT DEFAULT '',
+        first_seen TIMESTAMPTZ DEFAULT NOW(),
+        last_seen TIMESTAMPTZ DEFAULT NOW(),
+        request_count INTEGER DEFAULT 0
+      )
+    `);
+  }
+
+  return databaseReady;
+}
+
+/* =========================================================
    TELEGRAM API
 ========================================================= */
 
@@ -87,6 +121,38 @@ async function telegram(method, data) {
   }
 
   return result;
+}
+
+/* =========================================================
+   AUTOMATIC WEBHOOK SETUP
+========================================================= */
+
+let webhookSetupPromise = null;
+
+function setupWebhook() {
+  if (!BOT_TOKEN) {
+    console.error('BOT_TOKEN is missing');
+    return Promise.resolve();
+  }
+
+  if (!webhookSetupPromise) {
+    webhookSetupPromise = telegram('setWebhook', {
+      url: WEBHOOK_URL,
+      secret_token: WEBHOOK_SECRET,
+      allowed_updates: ['message']
+    })
+      .then(() => {
+        console.log('Telegram webhook configured');
+      })
+      .catch((error) => {
+        console.error(
+          'Webhook setup failed:',
+          error.message
+        );
+      });
+  }
+
+  return webhookSetupPromise;
 }
 
 /* =========================================================
@@ -137,33 +203,13 @@ function verifyTelegramInitData(initData) {
     return JSON.parse(userRaw);
 
   } catch (error) {
-    console.error('InitData verification error:', error);
+    console.error(
+      'InitData verification error:',
+      error
+    );
+
     return null;
   }
-}
-
-/* =========================================================
-   DATABASE TABLE
-========================================================= */
-
-async function initDatabase() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS fraud_users (
-      telegram_id BIGINT PRIMARY KEY,
-      username TEXT DEFAULT '',
-      first_name TEXT DEFAULT '',
-      ip_hash TEXT DEFAULT '',
-      device_hash TEXT DEFAULT '',
-      vpn_detected BOOLEAN DEFAULT FALSE,
-      proxy_detected BOOLEAN DEFAULT FALSE,
-      risk_score INTEGER DEFAULT 0,
-      status TEXT DEFAULT 'active',
-      ban_reason TEXT DEFAULT '',
-      first_seen TIMESTAMPTZ DEFAULT NOW(),
-      last_seen TIMESTAMPTZ DEFAULT NOW(),
-      request_count INTEGER DEFAULT 0
-    )
-  `);
 }
 
 /* =========================================================
@@ -182,7 +228,8 @@ function hashValue(value) {
 ========================================================= */
 
 function getClientIP(req) {
-  const forwarded = req.headers['x-forwarded-for'];
+  const forwarded =
+    req.headers['x-forwarded-for'];
 
   if (forwarded) {
     return String(forwarded)
@@ -201,7 +248,9 @@ function getClientIP(req) {
    HOME
 ========================================================= */
 
-app.get('/', (req, res) => {
+app.get('/', async (req, res) => {
+  setupWebhook();
+
   res.json({
     ok: true,
     app: 'Adewa Telegram Mini App',
@@ -210,13 +259,44 @@ app.get('/', (req, res) => {
 });
 
 /* =========================================================
+   WEBHOOK STATUS
+========================================================= */
+
+app.get('/api/webhook-status', async (req, res) => {
+  try {
+    const result = await telegram(
+      'getWebhookInfo',
+      {}
+    );
+
+    res.json({
+      ok: true,
+      webhook: result.result
+    });
+
+  } catch (error) {
+
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+/* =========================================================
    AUTH
 ========================================================= */
 
 app.post('/api/auth', async (req, res) => {
   try {
-    const initData = req.headers['x-init-data'];
-    const deviceId = req.headers['x-device'] || '';
+
+    await initDatabase();
+
+    const initData =
+      req.headers['x-init-data'];
+
+    const deviceId =
+      req.headers['x-device'] || '';
 
     const telegramUser =
       verifyTelegramInitData(initData);
@@ -228,7 +308,8 @@ app.post('/api/auth', async (req, res) => {
       });
     }
 
-    const telegramId = Number(telegramUser.id);
+    const telegramId =
+      Number(telegramUser.id);
 
     if (!telegramId) {
       return res.status(400).json({
@@ -237,27 +318,25 @@ app.post('/api/auth', async (req, res) => {
       });
     }
 
-    const username = telegramUser.username || '';
-    const firstName = telegramUser.first_name || '';
+    const username =
+      telegramUser.username || '';
 
-    const ip = getClientIP(req);
+    const firstName =
+      telegramUser.first_name || '';
 
-    const ipHash = hashValue(ip);
-    const deviceHash = hashValue(deviceId);
+    const ip =
+      getClientIP(req);
 
-    const existing = await pool.query(
-      `
-      SELECT *
-      FROM fraud_users
-      WHERE telegram_id = $1
-      `,
-      [telegramId]
-    );
+    const ipHash =
+      hashValue(ip);
+
+    const deviceHash =
+      hashValue(deviceId);
 
     let riskScore = 0;
 
     /* =====================================================
-       CHECK SAME IP
+       SAME IP
     ===================================================== */
 
     const sameIP = await pool.query(
@@ -269,9 +348,8 @@ app.post('/api/auth', async (req, res) => {
       [ipHash]
     );
 
-    const ipCount = Number(
-      sameIP.rows[0].count || 0
-    );
+    const ipCount =
+      Number(sameIP.rows[0].count || 0);
 
     if (ipCount >= 8) {
       riskScore += 30;
@@ -280,25 +358,25 @@ app.post('/api/auth', async (req, res) => {
     }
 
     /* =====================================================
-       CHECK SAME DEVICE
+       SAME DEVICE
     ===================================================== */
 
-    const sameDevice = await pool.query(
-      `
-      SELECT COUNT(*)
-      FROM fraud_users
-      WHERE device_hash = $1
-      `,
-      [deviceHash]
-    );
+    const sameDevice =
+      await pool.query(
+        `
+        SELECT COUNT(*)
+        FROM fraud_users
+        WHERE device_hash = $1
+        `,
+        [deviceHash]
+      );
 
-    const deviceCount = Number(
-      sameDevice.rows[0].count || 0
-    );
+    const deviceCount =
+      Number(
+        sameDevice.rows[0].count || 0
+      );
 
-    if (deviceCount >= 4) {
-      riskScore += 40;
-    } else if (deviceCount >= 2) {
+    if (deviceCount >= 2) {
       riskScore += 40;
     }
 
@@ -367,17 +445,15 @@ app.post('/api/auth', async (req, res) => {
       ]
     );
 
-    /* =====================================================
-       RESPONSE
-    ===================================================== */
-
     return res.json({
       ok: true,
+
       user: {
         id: telegramId,
         username,
         first_name: firstName
       },
+
       security: {
         risk_score: riskScore,
         status
@@ -385,7 +461,11 @@ app.post('/api/auth', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('AUTH ERROR:', error);
+
+    console.error(
+      'AUTH ERROR:',
+      error
+    );
 
     return res.status(500).json({
       ok: false,
@@ -399,60 +479,84 @@ app.post('/api/auth', async (req, res) => {
 ========================================================= */
 
 app.post('/telegram/webhook', async (req, res) => {
+
   try {
 
     const secret =
-      req.headers['x-telegram-bot-api-secret-token'];
+      req.headers[
+        'x-telegram-bot-api-secret-token'
+      ];
 
     if (secret !== WEBHOOK_SECRET) {
+      console.error(
+        'Invalid Telegram webhook secret'
+      );
+
       return res.sendStatus(403);
     }
 
     const update = req.body;
 
-    const message = update?.message;
+    const message =
+      update?.message;
 
     if (!message) {
       return res.sendStatus(200);
     }
 
-    const chatId = message.chat?.id;
+    const chatId =
+      message.chat?.id;
 
     const text =
       message.text || '';
+
+    console.log(
+      'Telegram message:',
+      text,
+      'from:',
+      chatId
+    );
 
     /* =====================================================
        /START
     ===================================================== */
 
-    if (/^\/start(?:@\w+)?(?:\s.*)?$/i.test(text)) {
+    if (
+      /^\/start(?:@\w+)?(?:\s.*)?$/i
+        .test(text)
+    ) {
 
       const firstName =
-        message.from?.first_name || 'User';
+        message.from?.first_name ||
+        'User';
 
-      await telegram('sendMessage', {
-        chat_id: chatId,
+      await telegram(
+        'sendMessage',
+        {
+          chat_id: chatId,
 
-        text:
-          `👋 Hello ${firstName}!\n\n` +
-          `💰 Welcome to Adewa.\n\n` +
-          `Complete tasks, surveys and ads ` +
-          `and earn rewards.\n\n` +
-          `👇 Open the Mini App:`,
+          text:
+            `👋 Hello ${firstName}!\n\n` +
+            `💰 Welcome to Adewa.\n\n` +
+            `Complete tasks, surveys and ads ` +
+            `and earn rewards.\n\n` +
+            `👇 Open the Mini App:`,
 
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: '🚀 OPEN ADEWA',
-                web_app: {
-                  url: MINI_APP_URL
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: '🚀 OPEN ADEWA',
+
+                  web_app: {
+                    url: MINI_APP_URL
+                  }
                 }
-              }
+              ]
             ]
-          ]
+          }
         }
-      });
+      );
     }
 
     return res.sendStatus(200);
@@ -472,147 +576,174 @@ app.post('/telegram/webhook', async (req, res) => {
    ADMIN USER
 ========================================================= */
 
-app.get('/api/admin/user/:id', async (req, res) => {
-  try {
+app.get(
+  '/api/admin/user/:id',
+  async (req, res) => {
 
-    const id = req.params.id;
+    try {
 
-    const result = await pool.query(
-      `
-      SELECT
-        telegram_id,
-        username,
-        first_name,
-        vpn_detected,
-        proxy_detected,
-        risk_score,
-        status,
-        ban_reason,
-        first_seen,
-        last_seen,
-        request_count
-      FROM fraud_users
-      WHERE telegram_id = $1
-      `,
-      [id]
-    );
+      await initDatabase();
 
-    if (!result.rows.length) {
-      return res.status(404).json({
+      const id =
+        req.params.id;
+
+      const result =
+        await pool.query(
+          `
+          SELECT
+            telegram_id,
+            username,
+            first_name,
+            vpn_detected,
+            proxy_detected,
+            risk_score,
+            status,
+            ban_reason,
+            first_seen,
+            last_seen,
+            request_count
+          FROM fraud_users
+          WHERE telegram_id = $1
+          `,
+          [id]
+        );
+
+      if (!result.rows.length) {
+        return res.status(404).json({
+          ok: false,
+          error: 'User not found'
+        });
+      }
+
+      res.json({
+        ok: true,
+        user: result.rows[0]
+      });
+
+    } catch (error) {
+
+      console.error(error);
+
+      res.status(500).json({
         ok: false,
-        error: 'User not found'
+        error: 'Server error'
       });
     }
-
-    res.json({
-      ok: true,
-      user: result.rows[0]
-    });
-
-  } catch (error) {
-
-    console.error(error);
-
-    res.status(500).json({
-      ok: false,
-      error: 'Server error'
-    });
   }
-});
+);
 
 /* =========================================================
    ADMIN BAN
 ========================================================= */
 
-app.post('/api/admin/ban/:id', async (req, res) => {
+app.post(
+  '/api/admin/ban/:id',
+  async (req, res) => {
 
-  try {
+    try {
 
-    const id = req.params.id;
+      await initDatabase();
 
-    await pool.query(
-      `
-      UPDATE fraud_users
-      SET
-        status = 'banned',
-        ban_reason = $2
-      WHERE telegram_id = $1
-      `,
-      [
-        id,
-        req.body?.reason || 'Manual ban'
-      ]
-    );
+      const id =
+        req.params.id;
 
-    res.json({
-      ok: true,
-      message: 'User banned'
-    });
+      await pool.query(
+        `
+        UPDATE fraud_users
+        SET
+          status = 'banned',
+          ban_reason = $2
+        WHERE telegram_id = $1
+        `,
+        [
+          id,
+          req.body?.reason ||
+            'Manual ban'
+        ]
+      );
 
-  } catch (error) {
+      res.json({
+        ok: true,
+        message: 'User banned'
+      });
 
-    console.error(error);
+    } catch (error) {
 
-    res.status(500).json({
-      ok: false,
-      error: 'Server error'
-    });
+      console.error(error);
+
+      res.status(500).json({
+        ok: false,
+        error: 'Server error'
+      });
+    }
   }
-});
+);
 
 /* =========================================================
    ADMIN UNBAN
 ========================================================= */
 
-app.post('/api/admin/unban/:id', async (req, res) => {
+app.post(
+  '/api/admin/unban/:id',
+  async (req, res) => {
 
-  try {
+    try {
 
-    const id = req.params.id;
+      await initDatabase();
 
-    await pool.query(
-      `
-      UPDATE fraud_users
-      SET
-        status = 'active',
-        ban_reason = ''
-      WHERE telegram_id = $1
-      `,
-      [id]
-    );
+      const id =
+        req.params.id;
 
-    res.json({
-      ok: true,
-      message: 'User unbanned'
-    });
+      await pool.query(
+        `
+        UPDATE fraud_users
+        SET
+          status = 'active',
+          ban_reason = ''
+        WHERE telegram_id = $1
+        `,
+        [id]
+      );
 
-  } catch (error) {
+      res.json({
+        ok: true,
+        message: 'User unbanned'
+      });
 
-    console.error(error);
+    } catch (error) {
 
-    res.status(500).json({
-      ok: false,
-      error: 'Server error'
-    });
+      console.error(error);
+
+      res.status(500).json({
+        ok: false,
+        error: 'Server error'
+      });
+    }
   }
-});
+);
 
 /* =========================================================
    START SERVER
 ========================================================= */
 
-const PORT = process.env.PORT || 3000;
+const PORT =
+  process.env.PORT || 3000;
 
 if (require.main === module) {
 
   initDatabase()
     .then(() => {
 
-      app.listen(PORT, () => {
-        console.log(
-          `Adewa server running on port ${PORT}`
-        );
-      });
+      setupWebhook();
+
+      app.listen(
+        PORT,
+        () => {
+          console.log(
+            `Adewa server running on port ${PORT}`
+          );
+        }
+      );
 
     })
     .catch((error) => {
@@ -625,5 +756,11 @@ if (require.main === module) {
       process.exit(1);
     });
 }
+
+/* =========================================================
+   VERCEL
+========================================================= */
+
+setupWebhook();
 
 module.exports = app;
