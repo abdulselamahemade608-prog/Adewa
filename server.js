@@ -3,337 +3,728 @@
 const express = require('express');
 const crypto = require('crypto');
 const { Pool } = require('pg');
+const cors = require('cors');
 
 const app = express();
 
+app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 
-// =========================================================
-// CONFIG
-// =========================================================
+/* =========================================================
+   CONFIG
+========================================================= */
 
 const PORT = process.env.PORT || 3000;
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const DATABASE_URL = process.env.DATABASE_URL;
+const BOT_TOKEN =
+  process.env.BOT_TOKEN || '';
 
-const WEBHOOK_SECRET =
-  process.env.WEBHOOK_SECRET || 'adewa_webhook_secret';
+const DATABASE_URL =
+  process.env.DATABASE_URL || '';
 
-// Comma-separated Telegram user IDs allowed to use /ban, /unban, etc.
-// Example: ADMIN_IDS=123456789,987654321
 const ADMIN_IDS =
   String(process.env.ADMIN_IDS || '')
     .split(',')
-    .map((id) => id.trim())
-    .filter(Boolean)
-    .map(Number);
+    .map(x => x.trim())
+    .filter(Boolean);
 
-function isAdmin(telegramId) {
-  return ADMIN_IDS.includes(Number(telegramId));
-}
+const PROOF_CHANNEL =
+  process.env.PROOF_CHANNEL ||
+  '@proof_chnallel';
+
+const WITHDRAW_CHANNEL =
+  process.env.WITHDRAW_CHANNEL ||
+  '';
+
+const WEBHOOK_SECRET =
+  process.env.WEBHOOK_SECRET ||
+  'adewa_webhook_secret';
+
+const CRON_SECRET =
+  process.env.CRON_SECRET ||
+  '';
+
+const BOT_USERNAME =
+  process.env.BOT_USERNAME ||
+  '';
 
 const MINI_APP_URL =
+  process.env.MINI_APP_URL ||
   'https://abdulselamahemade608-prog.github.io/Adewa-frontend/';
 
 const WEBHOOK_URL =
   'https://adewa.vercel.app/telegram/webhook';
 
-const TELEGRAM_API =
-  `https://api.telegram.org/bot${BOT_TOKEN}`;
+const ANTHROPIC_API_KEY =
+  process.env.ANTHROPIC_API_KEY ||
+  '';
 
+const CLAUDE_MODEL =
+  process.env.CLAUDE_MODEL ||
+  'claude-haiku-4-5-20251001';
 
-// =========================================================
-// BASIC CHECK
-// =========================================================
+/* =========================================================
+   DEFAULT REQUIRED CHANNELS
 
-if (!BOT_TOKEN) {
-  console.warn('WARNING: BOT_TOKEN is not configured.');
-}
+   These are fallback channels.
 
-if (!DATABASE_URL) {
-  console.warn('WARNING: DATABASE_URL is not configured.');
-}
+   Admin/database channels can also be used.
+========================================================= */
 
+const DEFAULT_GATE_CHANNELS = [
+  '@andbndj',
+  '@proof_chnallel',
+  '@ABDU_CRYPTO',
+  '@m_r_work1'
+];
 
-// =========================================================
-// POSTGRES
-// =========================================================
+/* =========================================================
+   DATABASE
+========================================================= */
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: {
     rejectUnauthorized: false
-  }
+  },
+  max: 5
 });
 
+const q = (text, params) =>
+  pool.query(text, params);
 
-// =========================================================
-// DATABASE INITIALIZATION
-// =========================================================
+/* =========================================================
+   HELPERS
+========================================================= */
+
+const todayStr = () =>
+  new Date().toISOString().slice(0, 10);
+
+const fail = (
+  res,
+  status,
+  error,
+  extra = {}
+) => {
+  return res.status(status).json({
+    error,
+    ...extra
+  });
+};
+
+const isAdmin = id =>
+  ADMIN_IDS.includes(String(id));
+
+function sha256(value) {
+  return crypto
+    .createHash('sha256')
+    .update(String(value || ''))
+    .digest('hex');
+}
+
+/* =========================================================
+   TELEGRAM API
+========================================================= */
+
+async function tg(method, body = {}) {
+
+  if (!BOT_TOKEN) {
+    return {
+      ok: false,
+      description: 'BOT_TOKEN missing'
+    };
+  }
+
+  try {
+
+    const response =
+      await fetch(
+        `https://api.telegram.org/bot${BOT_TOKEN}/${method}`,
+        {
+          method: 'POST',
+
+          headers: {
+            'Content-Type':
+              'application/json'
+          },
+
+          body:
+            JSON.stringify(body)
+        }
+      );
+
+    return await response.json();
+
+  } catch (error) {
+
+    console.error(
+      'Telegram API error:',
+      error
+    );
+
+    return {
+      ok: false,
+      description:
+        error.message
+    };
+  }
+}
+
+/* =========================================================
+   DATABASE INITIALIZATION
+========================================================= */
 
 let databaseReady = null;
 
-function initDatabase() {
+async function initDatabase() {
 
   if (databaseReady) {
     return databaseReady;
   }
 
-  databaseReady = (async () => {
+  databaseReady =
+    (async () => {
 
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS fraud_users (
-        telegram_id BIGINT PRIMARY KEY,
+      /* ---------------- USERS ---------------- */
 
-        username TEXT NOT NULL DEFAULT '',
-        first_name TEXT NOT NULL DEFAULT '',
+      await q(`
+        CREATE TABLE IF NOT EXISTS users (
+          id BIGINT PRIMARY KEY,
 
-        ip_hash TEXT NOT NULL DEFAULT '',
-        device_hash TEXT NOT NULL DEFAULT '',
+          first_name TEXT NOT NULL DEFAULT '',
+          username TEXT NOT NULL DEFAULT '',
 
-        vpn_detected BOOLEAN NOT NULL DEFAULT FALSE,
-        proxy_detected BOOLEAN NOT NULL DEFAULT FALSE,
+          coins NUMERIC NOT NULL DEFAULT 0,
+          ads_coins NUMERIC NOT NULL DEFAULT 0,
+          invite_coins NUMERIC NOT NULL DEFAULT 0,
 
-        risk_score INTEGER NOT NULL DEFAULT 0,
+          referred_by BIGINT,
 
-        status TEXT NOT NULL DEFAULT 'pending',
+          referral_paid BOOLEAN
+            NOT NULL DEFAULT FALSE,
 
-        ban_reason TEXT NOT NULL DEFAULT '',
+          referral_reward_paid NUMERIC
+            NOT NULL DEFAULT 0,
 
-        verification_message_sent BOOLEAN NOT NULL DEFAULT FALSE,
+          banned BOOLEAN
+            NOT NULL DEFAULT FALSE,
 
-        ban_message_sent BOOLEAN NOT NULL DEFAULT FALSE,
+          flagged BOOLEAN
+            NOT NULL DEFAULT FALSE,
 
-        first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          vip_unlimited_until TIMESTAMPTZ,
 
-        request_count INTEGER NOT NULL DEFAULT 0
-      )
-    `);
+          lang VARCHAR(5)
+            NOT NULL DEFAULT 'am',
 
-    await pool.query(`
-      ALTER TABLE fraud_users
-      ADD COLUMN IF NOT EXISTS verification_message_sent
-      BOOLEAN NOT NULL DEFAULT FALSE
-    `);
+          last_ip TEXT
+            NOT NULL DEFAULT '',
 
-    await pool.query(`
-      ALTER TABLE fraud_users
-      ADD COLUMN IF NOT EXISTS ban_message_sent
-      BOOLEAN NOT NULL DEFAULT FALSE
-    `);
+          daily_ads INTEGER
+            NOT NULL DEFAULT 0,
 
-    // ---------------------------------------------------
-    // GATE CHANNELS (channels users must join before the
-    // mini app opens). Admin-managed via /api/admin/channels.
-    // ---------------------------------------------------
+          daily_invite INTEGER
+            NOT NULL DEFAULT 0,
 
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS gate_channels (
-        id SERIAL PRIMARY KEY,
+          daily_task INTEGER
+            NOT NULL DEFAULT 0,
 
-        chat_username TEXT NOT NULL,
-        title TEXT NOT NULL DEFAULT '',
-        invite_link TEXT NOT NULL DEFAULT '',
+          daily_earn_day DATE,
 
-        position INTEGER NOT NULL DEFAULT 0,
-        active BOOLEAN NOT NULL DEFAULT TRUE,
+          created_at TIMESTAMPTZ
+            NOT NULL DEFAULT NOW(),
 
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
+          updated_at TIMESTAMPTZ
+            NOT NULL DEFAULT NOW()
+        )
+      `);
 
-    console.log('Database initialized.');
+      /* ---------------- REQUIRED CHANNELS ---------------- */
 
-  })().catch((error) => {
+      await q(`
+        CREATE TABLE IF NOT EXISTS required_channels (
+          id BIGSERIAL PRIMARY KEY,
 
-    databaseReady = null;
+          channel_id TEXT NOT NULL,
 
-    console.error(
-      'Database initialization error:',
-      error
-    );
+          username TEXT NOT NULL DEFAULT '',
 
-    throw error;
-  });
+          title TEXT NOT NULL DEFAULT '',
+
+          invite_url TEXT NOT NULL DEFAULT '',
+
+          enabled BOOLEAN NOT NULL DEFAULT TRUE,
+
+          required BOOLEAN NOT NULL DEFAULT TRUE,
+
+          sort_order INTEGER NOT NULL DEFAULT 0,
+
+          created_at TIMESTAMPTZ
+            NOT NULL DEFAULT NOW(),
+
+          updated_at TIMESTAMPTZ
+            NOT NULL DEFAULT NOW(),
+
+          UNIQUE(channel_id)
+        )
+      `);
+
+      /* ---------------- FRAUD USERS ---------------- */
+
+      await q(`
+        CREATE TABLE IF NOT EXISTS fraud_users (
+          telegram_id BIGINT PRIMARY KEY,
+
+          username TEXT NOT NULL DEFAULT '',
+
+          first_name TEXT NOT NULL DEFAULT '',
+
+          ip_hash TEXT NOT NULL DEFAULT '',
+
+          device_hash TEXT NOT NULL DEFAULT '',
+
+          vpn_detected BOOLEAN
+            NOT NULL DEFAULT FALSE,
+
+          proxy_detected BOOLEAN
+            NOT NULL DEFAULT FALSE,
+
+          tor_detected BOOLEAN
+            NOT NULL DEFAULT FALSE,
+
+          hosting_detected BOOLEAN
+            NOT NULL DEFAULT FALSE,
+
+          risk_score INTEGER
+            NOT NULL DEFAULT 0,
+
+          status TEXT
+            NOT NULL DEFAULT 'pending',
+
+          ban_reason TEXT
+            NOT NULL DEFAULT '',
+
+          ban_source TEXT
+            NOT NULL DEFAULT '',
+
+          verification_message_sent BOOLEAN
+            NOT NULL DEFAULT FALSE,
+
+          ban_message_sent BOOLEAN
+            NOT NULL DEFAULT FALSE,
+
+          first_seen TIMESTAMPTZ
+            NOT NULL DEFAULT NOW(),
+
+          last_seen TIMESTAMPTZ
+            NOT NULL DEFAULT NOW(),
+
+          request_count INTEGER
+            NOT NULL DEFAULT 0
+        )
+      `);
+
+      /* ---------------- AD VIEWS ---------------- */
+
+      await q(`
+        CREATE TABLE IF NOT EXISTS ad_views (
+          id BIGSERIAL PRIMARY KEY,
+
+          user_id BIGINT NOT NULL,
+
+          nonce TEXT NOT NULL,
+
+          completed BOOLEAN
+            NOT NULL DEFAULT FALSE,
+
+          reward NUMERIC
+            NOT NULL DEFAULT 0,
+
+          started_at TIMESTAMPTZ
+            NOT NULL DEFAULT NOW(),
+
+          completed_at TIMESTAMPTZ
+        )
+      `);
+
+      /* ---------------- SETTINGS ---------------- */
+
+      await q(`
+        CREATE TABLE IF NOT EXISTS settings (
+          key TEXT PRIMARY KEY,
+
+          value JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+          updated_at TIMESTAMPTZ
+            NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      /* ---------------- SPINS ---------------- */
+
+      await q(`
+        CREATE TABLE IF NOT EXISTS spins (
+          id BIGSERIAL PRIMARY KEY,
+
+          user_id BIGINT NOT NULL,
+
+          cost NUMERIC NOT NULL DEFAULT 0,
+
+          reward NUMERIC NOT NULL DEFAULT 0,
+
+          created_at TIMESTAMPTZ
+            NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      /* ---------------- TASKS ---------------- */
+
+      await q(`
+        CREATE TABLE IF NOT EXISTS tasks (
+          id BIGSERIAL PRIMARY KEY,
+
+          type TEXT NOT NULL DEFAULT 'url',
+
+          title TEXT NOT NULL DEFAULT '',
+
+          chat TEXT NOT NULL DEFAULT '',
+
+          url TEXT NOT NULL DEFAULT '',
+
+          reward NUMERIC NOT NULL DEFAULT 0,
+
+          max_users INTEGER NOT NULL DEFAULT 0,
+
+          completed_users INTEGER NOT NULL DEFAULT 0,
+
+          sponsor TEXT NOT NULL DEFAULT '',
+
+          enabled BOOLEAN NOT NULL DEFAULT TRUE,
+
+          created_at TIMESTAMPTZ
+            NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      /* ---------------- TASK SUBS ---------------- */
+
+      await q(`
+        CREATE TABLE IF NOT EXISTS task_subs (
+          id BIGSERIAL PRIMARY KEY,
+
+          task_id BIGINT NOT NULL,
+
+          user_id BIGINT NOT NULL,
+
+          completed BOOLEAN NOT NULL DEFAULT FALSE,
+
+          created_at TIMESTAMPTZ
+            NOT NULL DEFAULT NOW(),
+
+          UNIQUE(task_id, user_id)
+        )
+      `);
+
+      /* ---------------- WITHDRAWALS ---------------- */
+
+      await q(`
+        CREATE TABLE IF NOT EXISTS withdrawals (
+          id BIGSERIAL PRIMARY KEY,
+
+          user_id BIGINT NOT NULL,
+
+          etb NUMERIC NOT NULL DEFAULT 0,
+
+          coins NUMERIC NOT NULL DEFAULT 0,
+
+          method TEXT NOT NULL DEFAULT '',
+
+          account TEXT NOT NULL DEFAULT '',
+
+          holder_name TEXT NOT NULL DEFAULT '',
+
+          from_ads NUMERIC NOT NULL DEFAULT 0,
+
+          from_invite NUMERIC NOT NULL DEFAULT 0,
+
+          fee NUMERIC NOT NULL DEFAULT 0,
+
+          net_etb NUMERIC NOT NULL DEFAULT 0,
+
+          status TEXT NOT NULL DEFAULT 'pending',
+
+          admin_note TEXT NOT NULL DEFAULT '',
+
+          created_at TIMESTAMPTZ
+            NOT NULL DEFAULT NOW(),
+
+          updated_at TIMESTAMPTZ
+            NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      /* ---------------- PROMOS ---------------- */
+
+      await q(`
+        CREATE TABLE IF NOT EXISTS promos (
+          code TEXT PRIMARY KEY,
+
+          reward NUMERIC NOT NULL DEFAULT 0,
+
+          max_uses INTEGER NOT NULL DEFAULT 0,
+
+          uses INTEGER NOT NULL DEFAULT 0,
+
+          enabled BOOLEAN NOT NULL DEFAULT TRUE,
+
+          created_at TIMESTAMPTZ
+            NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      /* ---------------- PROMO USES ---------------- */
+
+      await q(`
+        CREATE TABLE IF NOT EXISTS promo_uses (
+          id BIGSERIAL PRIMARY KEY,
+
+          code TEXT NOT NULL,
+
+          user_id BIGINT NOT NULL,
+
+          reward NUMERIC NOT NULL DEFAULT 0,
+
+          created_at TIMESTAMPTZ
+            NOT NULL DEFAULT NOW(),
+
+          UNIQUE(code, user_id)
+        )
+      `);
+
+      /* ---------------- TASK BROADCASTS ---------------- */
+
+      await q(`
+        CREATE TABLE IF NOT EXISTS task_broadcasts (
+          id BIGSERIAL PRIMARY KEY,
+
+          task_id BIGINT NOT NULL,
+
+          message_id BIGINT,
+
+          created_at TIMESTAMPTZ
+            NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      /* ---------------- DEFAULT SETTINGS ---------------- */
+
+      const defaults = {
+
+        coin_per_etb: 100,
+
+        withdraw_fee_percent: 3,
+
+        min_withdraw_etb: 10,
+
+        withdraw_interval_hours: 48,
+
+        referral_reward: 1,
+
+        free_spins: 5,
+
+        spin_cost: 20,
+
+        daily_ads_limit: 10,
+
+        daily_task_limit: 20,
+
+        ad_reward: 1,
+
+        faq_knowledge: `
+App name: Adewa.
+
+Adewa is a Telegram Mini App where users earn coins.
+
+Earning sources:
+- Watching advertisements
+- Completing tasks
+- Inviting friends
+
+Coins can be converted to ETB.
+
+Withdraw methods:
+- Telebirr
+- CBE
+- M-Pesa
+
+Withdrawals are manually reviewed by administrators.
+
+Never invent exact fees, rewards, limits or payment times if they are not available in the settings.
+`
+      };
+
+      for (const [key, value] of Object.entries(defaults)) {
+
+        await q(
+          `
+          INSERT INTO settings(key,value)
+          VALUES($1,$2::jsonb)
+          ON CONFLICT(key)
+          DO NOTHING
+          `,
+          [
+            key,
+            JSON.stringify(value)
+          ]
+        );
+      }
+
+      /* ---------------- DEFAULT CHANNELS ---------------- */
+
+      for (
+        let i = 0;
+        i < DEFAULT_GATE_CHANNELS.length;
+        i++
+      ) {
+
+        const username =
+          DEFAULT_GATE_CHANNELS[i];
+
+        await q(
+          `
+          INSERT INTO required_channels(
+            channel_id,
+            username,
+            title,
+            invite_url,
+            enabled,
+            required,
+            sort_order
+          )
+          VALUES(
+            $1,$2,$2,$3,TRUE,TRUE,$4
+          )
+          ON CONFLICT(channel_id)
+          DO NOTHING
+          `,
+          [
+            username,
+            username,
+            `https://t.me/${username.replace('@','')}`,
+            i
+          ]
+        );
+      }
+
+      console.log(
+        'Adewa database initialized.'
+      );
+
+    })()
+    .catch(error => {
+
+      databaseReady = null;
+
+      console.error(
+        'Database initialization error:',
+        error
+      );
+
+      throw error;
+    });
 
   return databaseReady;
 }
 
+/* =========================================================
+   SETTINGS
+========================================================= */
 
-// =========================================================
-// TELEGRAM API
-// =========================================================
+let settingsCache = {
+  time: 0,
+  data: {}
+};
 
-async function telegram(method, data = {}) {
+async function getSettings() {
 
-  if (!BOT_TOKEN) {
-    throw new Error('BOT_TOKEN is missing.');
+  if (
+    Date.now() -
+      settingsCache.time <
+    30000
+  ) {
+    return settingsCache.data;
   }
 
-  const response = await fetch(
-    `${TELEGRAM_API}/${method}`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(data)
-    }
-  );
-
-  const result = await response.json();
-
-  if (!result.ok) {
-    throw new Error(
-      `Telegram API error: ${JSON.stringify(result)}`
+  const result =
+    await q(
+      `
+      SELECT key,value
+      FROM settings
+      `
     );
+
+  const data = {};
+
+  for (const row of result.rows) {
+    data[row.key] = row.value;
   }
 
-  return result;
+  settingsCache = {
+    time: Date.now(),
+    data
+  };
+
+  return data;
 }
 
-
-// =========================================================
-// SEND TELEGRAM MESSAGE
-// =========================================================
-
-async function sendTelegramMessage(chatId, text) {
-
-  try {
-
-    await telegram(
-      'sendMessage',
-      {
-        chat_id: chatId,
-        text
-      }
-    );
-
-    return true;
-
-  } catch (error) {
-
-    console.error(
-      'Telegram sendMessage error:',
-      error.message
-    );
-
-    return false;
-  }
-}
-
-
-// =========================================================
-// BAN MESSAGE BY REASON
-// =========================================================
-
-async function sendBanMessage(
-  chatId,
-  reason
+async function getSetting(
+  key,
+  fallback = null
 ) {
 
-  if (reason === 'vpn') {
+  const settings =
+    await getSettings();
 
-    return sendTelegramMessage(
-      chatId,
-
-      '🚫 VPN/Proxy detected.\n\n' +
-      'Your account has been permanently banned from Adewa.'
-    );
-  }
-
-  if (reason === 'multi') {
-
-    return sendTelegramMessage(
-      chatId,
-
-      '🚫 Multiple accounts detected.\n\n' +
-      'Your account has been permanently banned from Adewa.'
-    );
-  }
-
-  return sendTelegramMessage(
-    chatId,
-
-    '🚫 Your account has been permanently banned from Adewa.'
-  );
+  return settings[key] ??
+    fallback;
 }
 
+/* =========================================================
+   TELEGRAM INIT DATA
+========================================================= */
 
-// =========================================================
-// GET BAN REASON
-// =========================================================
-
-function getBanType(banReason) {
-
-  const reason =
-    String(banReason || '').toLowerCase();
+function verifyInitData(
+  initData
+) {
 
   if (
-    reason.includes('vpn') ||
-    reason.includes('proxy') ||
-    reason.includes('tor')
+    !initData ||
+    !BOT_TOKEN
   ) {
-    return 'vpn';
-  }
-
-  if (
-    reason.includes('multiple') ||
-    reason.includes('multi account')
-  ) {
-    return 'multi';
-  }
-
-  return 'other';
-}
-
-
-// =========================================================
-// TELEGRAM INIT DATA VERIFICATION
-// =========================================================
-
-function verifyTelegramInitData(initData) {
-
-  if (!initData) {
-
-    return {
-      ok: false,
-      reason: 'Missing Telegram initData'
-    };
-  }
-
-  if (!BOT_TOKEN) {
-
-    return {
-      ok: false,
-      reason: 'BOT_TOKEN is missing'
-    };
+    return null;
   }
 
   try {
 
     const params =
-      new URLSearchParams(initData);
+      new URLSearchParams(
+        initData
+      );
 
     const hash =
       params.get('hash');
 
     if (!hash) {
-
-      return {
-        ok: false,
-        reason: 'Missing hash'
-      };
+      return null;
     }
 
     params.delete('hash');
 
     const dataCheckString =
       [...params.entries()]
-        .sort(([a], [b]) =>
-          a.localeCompare(b)
+        .sort(
+          ([a], [b]) =>
+            a.localeCompare(b)
         )
         .map(
           ([key, value]) =>
@@ -359,41 +750,20 @@ function verifyTelegramInitData(initData) {
         .update(dataCheckString)
         .digest('hex');
 
-    const receivedBuffer =
-      Buffer.from(hash, 'hex');
-
-    const calculatedBuffer =
-      Buffer.from(
-        calculatedHash,
-        'hex'
-      );
-
     if (
-      receivedBuffer.length !==
-        calculatedBuffer.length ||
-      !crypto.timingSafeEqual(
-        receivedBuffer,
-        calculatedBuffer
-      )
+      calculatedHash !== hash
     ) {
-
-      return {
-        ok: false,
-        reason: 'Invalid Telegram signature'
-      };
+      return null;
     }
 
     const authDate =
       Number(
-        params.get('auth_date')
+        params.get('auth_date') ||
+        0
       );
 
     if (!authDate) {
-
-      return {
-        ok: false,
-        reason: 'Missing auth_date'
-      };
+      return null;
     }
 
     const now =
@@ -402,79 +772,49 @@ function verifyTelegramInitData(initData) {
       );
 
     if (
-      now - authDate > 86400
+      now - authDate >
+      86400
     ) {
-
-      return {
-        ok: false,
-        reason:
-          'Telegram initData expired'
-      };
+      return null;
     }
 
-    const userString =
+    const userJSON =
       params.get('user');
 
-    if (!userString) {
-
-      return {
-        ok: false,
-        reason:
-          'Missing Telegram user'
-      };
+    if (!userJSON) {
+      return null;
     }
 
     const user =
-      JSON.parse(userString);
+      JSON.parse(userJSON);
 
     if (!user.id) {
-
-      return {
-        ok: false,
-        reason:
-          'Invalid Telegram user'
-      };
+      return null;
     }
 
     return {
-      ok: true,
-      user
+      user,
+
+      start:
+        params.get(
+          'start_param'
+        ) || ''
     };
 
   } catch (error) {
 
     console.error(
-      'initData verification error:',
+      'InitData error:',
       error
     );
 
-    return {
-      ok: false,
-      reason:
-        'Invalid initData'
-    };
+    return null;
   }
 }
 
-
-// =========================================================
-// HASH
-// =========================================================
-
-function sha256(value) {
-
-  return crypto
-    .createHash('sha256')
-    .update(
-      String(value || '')
-    )
-    .digest('hex');
-}
-
-
-// =========================================================
-// CLIENT IP
-// =========================================================
+/* =========================================================
+   CLIENT IP
+========================================================= */
 
 function getClientIP(req) {
 
@@ -485,24 +825,29 @@ function getClientIP(req) {
 
   if (forwarded) {
 
-    return String(forwarded)
+    return String(
+      forwarded
+    )
       .split(',')[0]
       .trim();
   }
 
-  return (
-    req.headers['x-real-ip'] ||
+  return String(
+    req.headers[
+      'x-real-ip'
+    ] ||
     req.socket?.remoteAddress ||
     ''
-  );
+  ).trim();
 }
 
+/* =========================================================
+   VPN / PROXY / TOR DETECTION
+========================================================= */
 
-// =========================================================
-// VPN / PROXY DETECTION
-// =========================================================
-
-async function detectVPNProxy(ip) {
+async function detectVPNProxy(
+  ip
+) {
 
   const result = {
 
@@ -525,7 +870,10 @@ async function detectVPNProxy(ip) {
 
   const cleanIP =
     String(ip)
-      .replace(/^::ffff:/, '')
+      .replace(
+        /^::ffff:/,
+        ''
+      )
       .trim();
 
   if (
@@ -549,12 +897,14 @@ async function detectVPNProxy(ip) {
           method: 'GET',
 
           headers: {
-            'Accept':
+            Accept:
               'application/json'
           },
 
           signal:
-            AbortSignal.timeout(5000)
+            AbortSignal.timeout(
+              5000
+            )
         }
       );
 
@@ -607,10 +957,13 @@ async function detectVPNProxy(ip) {
   }
 }
 
+/* =========================================================
+   MULTI ACCOUNT DETECTION
 
-// =========================================================
-// MULTI ACCOUNT DETECTION
-// =========================================================
+   ORDER:
+   1. SAME DEVICE
+   2. SAME IP + DIFFERENT DEVICE
+========================================================= */
 
 async function detectMultiAccount(
   telegramId,
@@ -618,33 +971,28 @@ async function detectMultiAccount(
   deviceHash
 ) {
 
-  const result = {
-
-    detected: false,
-
-    reason: ''
-  };
-
   if (
-    !deviceHash &&
-    !ipHash
+    !ipHash &&
+    !deviceHash
   ) {
-    return result;
+    return {
+      detected: false,
+      reason: ''
+    };
   }
 
-  // -------------------------------------------------------
-  // SAME DEVICE
-  // -------------------------------------------------------
+  /* ---------- SAME DEVICE ---------- */
 
   if (deviceHash) {
 
-    const deviceResult =
-      await pool.query(
+    const result =
+      await q(
         `
         SELECT telegram_id
         FROM fraud_users
-        WHERE device_hash = $1
-          AND telegram_id <> $2
+        WHERE device_hash=$1
+          AND telegram_id<>$2
+          AND status='verified'
         LIMIT 1
         `,
         [
@@ -654,11 +1002,10 @@ async function detectMultiAccount(
       );
 
     if (
-      deviceResult.rows.length > 0
+      result.rows.length
     ) {
 
       return {
-
         detected: true,
 
         reason:
@@ -667,22 +1014,20 @@ async function detectMultiAccount(
     }
   }
 
-  // -------------------------------------------------------
-  // SAME IP + DIFFERENT DEVICE
-  // -------------------------------------------------------
+  /* ---------- SAME IP + DIFFERENT DEVICE ---------- */
 
   if (ipHash) {
 
-    const ipResult =
-      await pool.query(
+    const result =
+      await q(
         `
         SELECT
           telegram_id,
           device_hash
         FROM fraud_users
-        WHERE ip_hash = $1
-          AND telegram_id <> $2
-          AND status = 'verified'
+        WHERE ip_hash=$1
+          AND telegram_id<>$2
+          AND status='verified'
         LIMIT 1
         `,
         [
@@ -692,21 +1037,21 @@ async function detectMultiAccount(
       );
 
     if (
-      ipResult.rows.length > 0
+      result.rows.length
     ) {
 
       const oldDevice =
-        ipResult.rows[0]
+        result.rows[0]
           .device_hash;
 
       if (
         oldDevice &&
         deviceHash &&
-        oldDevice !== deviceHash
+        oldDevice !==
+          deviceHash
       ) {
 
         return {
-
           detected: true,
 
           reason:
@@ -716,308 +1061,734 @@ async function detectMultiAccount(
     }
   }
 
-  return result;
+  return {
+    detected: false,
+    reason: ''
+  };
 }
 
+/* =========================================================
+   BAN MESSAGES
+========================================================= */
 
-// =========================================================
-// BAN / UNBAN HELPERS (used by the /ban and /unban bot
-// commands; the existing /api/admin/ban(unban) HTTP routes
-// are left untouched)
-// =========================================================
+function getBanType(
+  reason
+) {
 
-async function banUserRecord(telegramId, reason) {
+  const r =
+    String(
+      reason || ''
+    ).toLowerCase();
 
-  return pool.query(
-    `
-    UPDATE fraud_users
-    SET
-      status = 'banned',
-      ban_reason = $2,
-      last_seen = NOW()
-    WHERE telegram_id = $1
-    `,
-    [telegramId, reason || 'Admin ban']
+  if (
+    r.includes('vpn') ||
+    r.includes('proxy') ||
+    r.includes('tor')
+  ) {
+    return 'vpn';
+  }
+
+  if (
+    r.includes('multi') ||
+    r.includes('multiple') ||
+    r.includes('same device') ||
+    r.includes('same ip')
+  ) {
+    return 'multi';
+  }
+
+  return 'other';
+}
+
+async function sendBanMessage(
+  chatId,
+  reason
+) {
+
+  const type =
+    getBanType(reason);
+
+  if (type === 'multi') {
+
+    return tg(
+      'sendMessage',
+      {
+        chat_id: chatId,
+
+        text:
+          '🚫 Multiple accounts detected.\n\n' +
+          'Your account has been permanently banned from Adewa.'
+      }
+    );
+  }
+
+  if (type === 'vpn') {
+
+    return tg(
+      'sendMessage',
+      {
+        chat_id: chatId,
+
+        text:
+          '🚫 VPN/Proxy detected.\n\n' +
+          'Your account has been permanently banned from Adewa.'
+      }
+    );
+  }
+
+  return tg(
+    'sendMessage',
+    {
+      chat_id: chatId,
+
+      text:
+        '🚫 Your account has been permanently banned from Adewa.'
+    }
   );
 }
 
-async function unbanUserRecord(telegramId) {
+/* =========================================================
+   REQUIRED CHANNELS
+========================================================= */
 
-  return pool.query(
-    `
-    UPDATE fraud_users
-    SET
-      status = 'verified',
-      ban_reason = '',
-      vpn_detected = FALSE,
-      proxy_detected = FALSE,
-      risk_score = 0,
-      ban_message_sent = FALSE,
-      last_seen = NOW()
-    WHERE telegram_id = $1
-    `,
-    [telegramId]
-  );
-}
-
-
-// =========================================================
-// GATE CHANNELS (join-before-entry)
-// =========================================================
-
-async function getGateChannels() {
+async function getRequiredChannels() {
 
   const result =
-    await pool.query(
+    await q(
       `
-      SELECT *
-      FROM gate_channels
-      WHERE active = TRUE
-      ORDER BY position ASC, id ASC
+      SELECT
+        id,
+        channel_id,
+        username,
+        title,
+        invite_url,
+        enabled,
+        required,
+        sort_order
+      FROM required_channels
+      WHERE enabled=TRUE
+        AND required=TRUE
+      ORDER BY sort_order ASC,id ASC
       `
     );
 
   return result.rows;
 }
 
-function buildChannelKeyboard(channels) {
+/* =========================================================
+   CHECK CHANNEL MEMBERSHIP
+========================================================= */
 
-  const rows =
-    channels.map((ch) => ([
+async function checkChannelMembership(
+  userId,
+  channel
+) {
+
+  const target =
+    channel.channel_id ||
+    channel.username;
+
+  const result =
+    await tg(
+      'getChatMember',
+      {
+        chat_id: target,
+        user_id: userId
+      }
+    );
+
+  if (!result.ok) {
+
+    console.error(
+      'getChatMember failed:',
+      target,
+      result.description
+    );
+
+    return {
+      ok: false,
+      joined: false,
+      error:
+        result.description ||
+        'membership_check_failed'
+    };
+  }
+
+  const member =
+    result.result;
+
+  const status =
+    member?.status;
+
+  const joined =
+    status === 'member' ||
+    status === 'administrator' ||
+    status === 'creator' ||
+    (
+      status === 'restricted' &&
+      member?.is_member === true
+    );
+
+  return {
+    ok: true,
+    joined
+  };
+}
+
+async function checkAllRequiredChannels(
+  userId
+) {
+
+  const channels =
+    await getRequiredChannels();
+
+  const missing = [];
+
+  for (const channel of channels) {
+
+    const check =
+      await checkChannelMembership(
+        userId,
+        channel
+      );
+
+    if (!check.ok) {
+
+      missing.push({
+        id: channel.id,
+        username:
+          channel.username,
+        title:
+          channel.title ||
+          channel.username,
+        invite_url:
+          channel.invite_url,
+        error:
+          check.error
+      });
+
+      continue;
+    }
+
+    if (!check.joined) {
+
+      missing.push({
+        id: channel.id,
+        username:
+          channel.username,
+        title:
+          channel.title ||
+          channel.username,
+        invite_url:
+          channel.invite_url
+      });
+    }
+  }
+
+  return {
+    ok: missing.length === 0,
+    channels,
+    missing
+  };
+}
+
+/* =========================================================
+   CHANNEL GATE KEYBOARD
+========================================================= */
+
+function buildChannelKeyboard(
+  channels
+) {
+
+  const rows = [];
+
+  for (const channel of channels) {
+
+    const url =
+      channel.invite_url ||
+      (
+        channel.username
+          ? `https://t.me/${String(
+              channel.username
+            ).replace('@','')}`
+          : ''
+      );
+
+    if (!url) {
+      continue;
+    }
+
+    rows.push([
       {
         text:
-          `📢 ${ch.title || ch.chat_username}`,
+          channel.title ||
+          channel.username ||
+          'Join Channel',
 
-        url:
-          ch.invite_link ||
-          `https://t.me/${String(ch.chat_username).replace(/^@/, '')}`
+        url
       }
-    ]));
+    ]);
+  }
 
   rows.push([
     {
-      text: '✅ Joined',
-      callback_data: 'check_joined'
+      text:
+        '✅ Joined',
+      callback_data:
+        'gate_joined'
     }
   ]);
 
-  return { inline_keyboard: rows };
+  return {
+    inline_keyboard:
+      rows
+  };
 }
 
-// Sends the "join all channels" gate message.
-// Returns false (and sends nothing) when no channels are
-// configured yet, so callers can fall back to the old
-// direct-to-mini-app behavior.
-async function sendChannelGate(chatId, firstName) {
+async function sendChannelGate(
+  chatId
+) {
 
   const channels =
-    await getGateChannels();
+    await getRequiredChannels();
 
-  if (channels.length === 0) {
-    return false;
+  if (!channels.length) {
+
+    return tg(
+      'sendMessage',
+      {
+        chat_id: chatId,
+
+        text:
+          'Welcome to Adewa.',
+
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text:
+                  '🚀 OPEN ADEWA',
+
+                web_app: {
+                  url:
+                    MINI_APP_URL
+                }
+              }
+            ]
+          ]
+        }
+      }
+    );
   }
 
-  await telegram(
+  return tg(
     'sendMessage',
     {
       chat_id: chatId,
 
       text:
-        `👋 Welcome ${firstName}!\n\n` +
-        `Please join all the channels below, then tap ✅ Joined to continue.`,
+        '👋 Welcome to Adewa!\n\n' +
+        'Before opening Adewa, please join all required channels below.\n\n' +
+        'After joining all channels, press "Joined".',
 
       reply_markup:
-        buildChannelKeyboard(channels)
+        buildChannelKeyboard(
+          channels
+        )
     }
   );
-
-  return true;
 }
 
-// Checks Telegram membership for every active gate channel.
-async function checkUserJoinedAllChannels(userId) {
+/* =========================================================
+   ENSURE USER
+========================================================= */
 
-  const channels =
-    await getGateChannels();
+async function ensureUser(
+  user,
+  referralId = null
+) {
 
-  if (channels.length === 0) {
-    return { joined: true, missing: [] };
+  if (!user?.id) {
+    return;
   }
 
-  const missing = [];
+  const existing =
+    await q(
+      `
+      SELECT id
+      FROM users
+      WHERE id=$1
+      LIMIT 1
+      `,
+      [user.id]
+    );
 
-  for (const ch of channels) {
+  if (
+    existing.rows.length
+  ) {
 
-    try {
+    await q(
+      `
+      UPDATE users
+      SET
+        first_name=$2,
+        username=$3,
+        updated_at=NOW()
+      WHERE id=$1
+      `,
+      [
+        user.id,
+        user.first_name || '',
+        user.username || ''
+      ]
+    );
 
-      const result =
-        await telegram(
-          'getChatMember',
-          {
-            chat_id: ch.chat_username,
-            user_id: userId
-          }
-        );
+    return;
+  }
 
-      const status =
-        result.result?.status;
+  let referredBy =
+    null;
 
-      const isMember =
-        ['member', 'administrator', 'creator']
-          .includes(status);
+  if (
+    referralId &&
+    /^\d+$/.test(
+      String(referralId)
+    ) &&
+    String(referralId) !==
+      String(user.id)
+  ) {
 
-      if (!isMember) {
-        missing.push(ch);
-      }
-
-    } catch (error) {
-
-      console.error(
-        'getChatMember error:',
-        ch.chat_username,
-        error.message
+    const ref =
+      await q(
+        `
+        SELECT id
+        FROM users
+        WHERE id=$1
+        LIMIT 1
+        `,
+        [referralId]
       );
 
-      // If we can't verify (bot not admin in the channel,
-      // wrong username, etc.) treat as not-joined so the
-      // gate never silently lets someone through.
-      missing.push(ch);
+    if (
+      ref.rows.length
+    ) {
+      referredBy =
+        referralId;
     }
   }
 
+  await q(
+    `
+    INSERT INTO users(
+      id,
+      first_name,
+      username,
+      referred_by
+    )
+    VALUES($1,$2,$3,$4)
+    ON CONFLICT(id)
+    DO NOTHING
+    `,
+    [
+      user.id,
+      user.first_name || '',
+      user.username || '',
+      referredBy
+    ]
+  );
+}
+
+/* =========================================================
+   SECURITY VERIFICATION
+========================================================= */
+
+async function runSecurityVerification(
+  user,
+  req
+) {
+
+  const telegramId =
+    Number(user.id);
+
+  const username =
+    user.username || '';
+
+  const firstName =
+    user.first_name || '';
+
+  const ip =
+    getClientIP(req);
+
+  const ipHash =
+    sha256(ip);
+
+  const deviceId =
+    String(
+      req.headers[
+        'x-device'
+      ] || ''
+    ).trim();
+
+  const deviceHash =
+    sha256(deviceId);
+
+  await q(
+    `
+    INSERT INTO fraud_users(
+      telegram_id,
+      username,
+      first_name,
+      ip_hash,
+      device_hash,
+      last_seen,
+      request_count
+    )
+    VALUES(
+      $1,$2,$3,$4,$5,NOW(),1
+    )
+    ON CONFLICT(telegram_id)
+    DO UPDATE SET
+      username=$2,
+      first_name=$3,
+      ip_hash=$4,
+      device_hash=$5,
+      last_seen=NOW(),
+      request_count=
+        fraud_users.request_count+1
+    `,
+    [
+      telegramId,
+      username,
+      firstName,
+      ipHash,
+      deviceHash
+    ]
+  );
+
+  /* =======================================================
+     1. MULTI ACCOUNT FIRST
+  ======================================================= */
+
+  const multi =
+    await detectMultiAccount(
+      telegramId,
+      ipHash,
+      deviceHash
+    );
+
+  if (multi.detected) {
+
+    await q(
+      `
+      UPDATE fraud_users
+      SET
+        status='banned',
+        ban_reason='multi',
+        ban_source='automatic',
+        risk_score=100,
+        last_seen=NOW()
+      WHERE telegram_id=$1
+      `,
+      [telegramId]
+    );
+
+    await q(
+      `
+      UPDATE users
+      SET banned=TRUE
+      WHERE id=$1
+      `,
+      [telegramId]
+    );
+
+    return {
+      ok: false,
+      status: 'banned',
+      reason: 'multi',
+      message:
+        'Multiple accounts detected.'
+    };
+  }
+
+  /* =======================================================
+     2. VPN / PROXY / TOR SECOND
+  ======================================================= */
+
+  const network =
+    await detectVPNProxy(ip);
+
+  await q(
+    `
+    UPDATE fraud_users
+    SET
+      vpn_detected=$2,
+      proxy_detected=$3,
+      tor_detected=$4,
+      hosting_detected=$5
+    WHERE telegram_id=$1
+    `,
+    [
+      telegramId,
+      network.vpn,
+      network.proxy,
+      network.tor,
+      network.hosting
+    ]
+  );
+
+  if (network.detected) {
+
+    await q(
+      `
+      UPDATE fraud_users
+      SET
+        status='banned',
+        ban_reason='vpn',
+        ban_source='automatic',
+        risk_score=100,
+        last_seen=NOW()
+      WHERE telegram_id=$1
+      `,
+      [telegramId]
+    );
+
+    await q(
+      `
+      UPDATE users
+      SET banned=TRUE
+      WHERE id=$1
+      `,
+      [telegramId]
+    );
+
+    return {
+      ok: false,
+      status: 'banned',
+      reason: 'vpn',
+      message:
+        'VPN/Proxy detected.'
+    };
+  }
+
+  /* =======================================================
+     3. VERIFIED
+  ======================================================= */
+
+  await q(
+    `
+    UPDATE fraud_users
+    SET
+      status='verified',
+      ban_reason='',
+      ban_source='',
+      risk_score=0,
+      last_seen=NOW()
+    WHERE telegram_id=$1
+    `,
+    [telegramId]
+  );
+
   return {
-    joined: missing.length === 0,
-    missing
+    ok: true,
+    status: 'verified',
+
+    checks: {
+      multi_account: 'NO',
+      vpn_proxy: 'YES'
+    }
   };
 }
 
+/* =========================================================
+   AUTH MIDDLEWARE
+========================================================= */
 
-// =========================================================
-// SUCCESS MESSAGE
-// =========================================================
-
-async function sendVerificationSuccess(
-  user
+async function auth(
+  req,
+  res,
+  next
 ) {
 
-  return sendTelegramMessage(
+  try {
 
-    user.id,
+    await initDatabase();
 
-    '✅ Your verification is successfully.'
-  );
-}
+    const initData =
+      req.headers[
+        'x-init-data'
+      ];
 
+    const verified =
+      verifyInitData(
+        initData
+      );
 
-// =========================================================
-// CORS
-// =========================================================
+    if (!verified) {
 
-app.use(
-  (req, res, next) => {
-
-    const origin =
-      req.headers.origin;
-
-    if (
-      origin ===
-      'https://abdulselamahemade608-prog.github.io'
-    ) {
-
-      res.setHeader(
-        'Access-Control-Allow-Origin',
-        origin
+      return fail(
+        res,
+        401,
+        'invalid_init_data'
       );
     }
 
-    res.setHeader(
-      'Access-Control-Allow-Headers',
-      'Content-Type, x-init-data, x-device'
-    );
-
-    res.setHeader(
-      'Access-Control-Allow-Methods',
-      'GET,POST,DELETE,OPTIONS'
-    );
-
-    if (
-      req.method === 'OPTIONS'
-    ) {
-
-      return res.sendStatus(204);
-    }
+    req.tgUser =
+      verified.user;
 
     next();
+
+  } catch (error) {
+
+    console.error(
+      'auth error:',
+      error
+    );
+
+    return fail(
+      res,
+      500,
+      'server'
+    );
   }
-);
-
-
-// =========================================================
-// WEBHOOK SETUP
-// =========================================================
-
-let webhookPromise = null;
-
-async function setupWebhook() {
-
-  if (webhookPromise) {
-    return webhookPromise;
-  }
-
-  webhookPromise =
-    telegram(
-      'setWebhook',
-      {
-        url: WEBHOOK_URL,
-
-        secret_token:
-          WEBHOOK_SECRET,
-
-        allowed_updates:
-          ['message', 'callback_query'],
-
-        drop_pending_updates:
-          false
-      }
-    )
-    .catch((error) => {
-
-      webhookPromise = null;
-
-      console.error(
-        'setWebhook error:',
-        error.message
-      );
-
-      throw error;
-    });
-
-  return webhookPromise;
 }
 
+/* =========================================================
+   ADMIN MIDDLEWARE
+========================================================= */
 
-// =========================================================
-// ROOT
-// =========================================================
+function adminOnly(
+  req,
+  res,
+  next
+) {
+
+  if (
+    !isAdmin(
+      req.tgUser?.id
+    )
+  ) {
+
+    return fail(
+      res,
+      403,
+      'admin_only'
+    );
+  }
+
+  next();
+}
+
+/* =========================================================
+   ROOT
+========================================================= */
 
 app.get(
   '/',
   async (req, res) => {
 
-    try {
-
-      await setupWebhook();
-
-    } catch (error) {
-
-      console.error(
-        'Webhook setup error:',
-        error.message
-      );
-    }
+    await initDatabase();
 
     res.json({
-
       ok: true,
 
       app:
@@ -1029,545 +1800,135 @@ app.get(
   }
 );
 
-
-// =========================================================
-// WEBHOOK STATUS
-// =========================================================
+/* =========================================================
+   WEBHOOK STATUS
+========================================================= */
 
 app.get(
   '/api/webhook-status',
   async (req, res) => {
 
-    try {
+    const result =
+      await tg(
+        'getWebhookInfo'
+      );
 
-      const result =
-        await telegram(
-          'getWebhookInfo'
-        );
-
-      res.json(result);
-
-    } catch (error) {
-
-      res.status(500).json({
-
-        ok: false,
-
-        error:
-          error.message
-      });
-    }
+    res.json(result);
   }
 );
 
+/* =========================================================
+   SET WEBHOOK
+========================================================= */
 
-// =========================================================
-// CALLBACK QUERY HANDLER ("✅ Joined" button, etc.)
-// =========================================================
+let webhookPromise = null;
 
-async function handleCallbackQuery(callbackQuery, res) {
+async function setupWebhook() {
 
-  try {
-
-    await initDatabase();
-
-    const data =
-      callbackQuery.data;
-
-    const chatId =
-      callbackQuery.message?.chat?.id;
-
-    const userId =
-      callbackQuery.from?.id;
-
-    const firstName =
-      callbackQuery.from?.first_name ||
-      'there';
-
-    if (data === 'check_joined') {
-
-      const membership =
-        await checkUserJoinedAllChannels(
-          userId
-        );
-
-      if (!membership.joined) {
-
-        await telegram(
-          'answerCallbackQuery',
-          {
-            callback_query_id:
-              callbackQuery.id,
-
-            text:
-              '❌ Please join all the channels first, then tap Joined again.',
-
-            show_alert: true
-          }
-        );
-
-        return res.sendStatus(200);
-      }
-
-      // -----------------------------------------------
-      // Joined all channels - but banned accounts still
-      // cannot reach the mini app.
-      // -----------------------------------------------
-
-      const bannedUser =
-        await pool.query(
-          `
-          SELECT
-            status,
-            ban_reason
-          FROM fraud_users
-          WHERE telegram_id = $1
-          LIMIT 1
-          `,
-          [userId]
-        );
-
-      const isBanned =
-        bannedUser.rows.length > 0 &&
-        bannedUser.rows[0].status ===
-          'banned';
-
-      if (isBanned) {
-
-        await telegram(
-          'answerCallbackQuery',
-          {
-            callback_query_id:
-              callbackQuery.id,
-
-            text:
-              '🚫 Your account is permanently banned.',
-
-            show_alert: true
-          }
-        );
-
-        const banType =
-          getBanType(
-            bannedUser.rows[0]
-              .ban_reason
-          );
-
-        await sendBanMessage(
-          chatId,
-          banType
-        );
-
-        return res.sendStatus(200);
-      }
-
-      // -----------------------------------------------
-      // All good - open the mini app.
-      // -----------------------------------------------
-
-      await telegram(
-        'answerCallbackQuery',
-        { callback_query_id: callbackQuery.id }
-      );
-
-      await telegram(
-        'sendMessage',
-        {
-          chat_id: chatId,
-
-          text:
-            `✅ Great, ${firstName}! You're all set.`,
-
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: '🚀 OPEN ADEWA',
-                  web_app: { url: MINI_APP_URL }
-                }
-              ]
-            ]
-          }
-        }
-      );
-
-      return res.sendStatus(200);
-    }
-
-    // Unknown callback_data - just clear the loading spinner.
-
-    await telegram(
-      'answerCallbackQuery',
-      { callback_query_id: callbackQuery.id }
-    ).catch(() => {});
-
-    return res.sendStatus(200);
-
-  } catch (error) {
-
-    console.error(
-      'Callback query error:',
-      error
-    );
-
-    await telegram(
-      'answerCallbackQuery',
-      { callback_query_id: callbackQuery.id }
-    ).catch(() => {});
-
-    return res.sendStatus(200);
+  if (webhookPromise) {
+    return webhookPromise;
   }
-}
 
+  webhookPromise =
+    tg(
+      'setWebhook',
+      {
+        url:
+          WEBHOOK_URL,
 
-// =========================================================
-// TELEGRAM WEBHOOK
-// =========================================================
+        secret_token:
+          WEBHOOK_SECRET,
 
-app.post(
-  '/telegram/webhook',
-  async (req, res) => {
+        allowed_updates: [
+          'message',
+          'callback_query'
+        ],
 
-    try {
-
-      const incomingSecret =
-        req.headers[
-          'x-telegram-bot-api-secret-token'
-        ];
-
-      if (
-        incomingSecret !==
-        WEBHOOK_SECRET
-      ) {
-
-        console.warn(
-          'Invalid webhook secret.'
-        );
-
-        return res.sendStatus(403);
+        drop_pending_updates:
+          false
       }
+    )
+    .catch(error => {
 
-      const update =
-        req.body;
-
-      // ===================================================
-      // CALLBACK QUERY (e.g. the "✅ Joined" button)
-      // ===================================================
-
-      if (update && update.callback_query) {
-
-        return handleCallbackQuery(
-          update.callback_query,
-          res
-        );
-      }
-
-      if (
-        !update ||
-        !update.message
-      ) {
-
-        return res.sendStatus(200);
-      }
-
-      const message =
-        update.message;
-
-      const chatId =
-        message.chat?.id;
-
-      const text =
-        typeof message.text ===
-        'string'
-          ? message.text.trim()
-          : '';
-
-      const lowerText =
-        text.toLowerCase();
-
-      if (!chatId) {
-        return res.sendStatus(200);
-      }
-
-      // ===================================================
-      // /BAN <telegram_id> [reason]   (admin only)
-      // ===================================================
-
-      if (
-        lowerText === '/ban' ||
-        lowerText.startsWith('/ban ')
-      ) {
-
-        await initDatabase();
-
-        if (!isAdmin(message.from?.id)) {
-
-          await sendTelegramMessage(
-            chatId,
-            '⛔ You are not authorized to use this command.'
-          );
-
-          return res.sendStatus(200);
-        }
-
-        const parts =
-          text.split(/\s+/);
-
-        const targetId =
-          Number(parts[1]);
-
-        const reason =
-          parts.slice(2).join(' ') ||
-          'Admin ban';
-
-        if (!targetId) {
-
-          await sendTelegramMessage(
-            chatId,
-            'Usage: /ban <telegram_id> [reason]'
-          );
-
-          return res.sendStatus(200);
-        }
-
-        await banUserRecord(
-          targetId,
-          reason
-        );
-
-        await sendTelegramMessage(
-          chatId,
-          `🚫 User ${targetId} has been banned.`
-        );
-
-        await sendBanMessage(
-          targetId,
-          getBanType(reason)
-        ).catch(() => {});
-
-        return res.sendStatus(200);
-      }
-
-      // ===================================================
-      // /UNBAN <telegram_id>   (admin only)
-      // ===================================================
-
-      if (
-        lowerText === '/unban' ||
-        lowerText.startsWith('/unban ')
-      ) {
-
-        await initDatabase();
-
-        if (!isAdmin(message.from?.id)) {
-
-          await sendTelegramMessage(
-            chatId,
-            '⛔ You are not authorized to use this command.'
-          );
-
-          return res.sendStatus(200);
-        }
-
-        const parts =
-          text.split(/\s+/);
-
-        const targetId =
-          Number(parts[1]);
-
-        if (!targetId) {
-
-          await sendTelegramMessage(
-            chatId,
-            'Usage: /unban <telegram_id>'
-          );
-
-          return res.sendStatus(200);
-        }
-
-        await unbanUserRecord(targetId);
-
-        await sendTelegramMessage(
-          chatId,
-          `✅ User ${targetId} has been unbanned.`
-        );
-
-        // Let the unbanned user straight back in.
-        await telegram(
-          'sendMessage',
-          {
-            chat_id: targetId,
-
-            text:
-              '✅ You have been unbanned. Tap below to continue.',
-
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  {
-                    text: '🚀 OPEN ADEWA',
-                    web_app: { url: MINI_APP_URL }
-                  }
-                ]
-              ]
-            }
-          }
-        ).catch(() => {});
-
-        return res.sendStatus(200);
-      }
-
-      // ===================================================
-      // /START
-      // ===================================================
-
-      if (
-        text === '/start' ||
-        text.startsWith('/start ')
-      ) {
-
-        // -----------------------------------------------
-        // IMPORTANT:
-        // Check database BEFORE opening Mini App.
-        // -----------------------------------------------
-
-        await initDatabase();
-
-        const userId =
-          message.from?.id;
-
-        const firstName =
-          message.from?.first_name ||
-          'there';
-
-        // -----------------------------------------------
-        // If Telegram user already has a ban, still show
-        // the channel gate (per product decision), but a
-        // banned user can never reach the mini app even
-        // after joining every channel — that block happens
-        // in handleCallbackQuery below.
-        // -----------------------------------------------
-
-        if (userId) {
-
-          const bannedUser =
-            await pool.query(
-              `
-              SELECT
-                status,
-                ban_reason
-              FROM fraud_users
-              WHERE telegram_id = $1
-              LIMIT 1
-              `,
-              [userId]
-            );
-
-          if (
-            bannedUser.rows.length > 0 &&
-            bannedUser.rows[0].status ===
-              'banned'
-          ) {
-
-            const shownGate =
-              await sendChannelGate(
-                chatId,
-                firstName
-              );
-
-            if (!shownGate) {
-
-              // No gate channels configured yet -
-              // fall back to the plain ban message.
-
-              const banType =
-                getBanType(
-                  bannedUser.rows[0]
-                    .ban_reason
-                );
-
-              await sendBanMessage(
-                chatId,
-                banType
-              );
-            }
-
-            return res.sendStatus(200);
-          }
-        }
-
-        // -----------------------------------------------
-        // Normal (not banned) user - join-channels gate
-        // -----------------------------------------------
-
-        const shownGate =
-          await sendChannelGate(
-            chatId,
-            firstName
-          );
-
-        if (shownGate) {
-          return res.sendStatus(200);
-        }
-
-        // No gate channels configured - keep the old
-        // direct-to-mini-app behavior as a fallback.
-
-        await telegram(
-          'sendMessage',
-          {
-
-            chat_id:
-              chatId,
-
-            text:
-              `👋 Hello ${firstName}!\n\n` +
-              `Welcome to Adewa Mini App.`,
-
-            reply_markup: {
-
-              inline_keyboard: [
-
-                [
-
-                  {
-
-                    text:
-                      '🚀 OPEN ADEWA',
-
-                    web_app: {
-
-                      url:
-                        MINI_APP_URL
-                    }
-                  }
-
-                ]
-
-              ]
-            }
-          }
-        );
-      }
-
-      return res.sendStatus(200);
-
-    } catch (error) {
+      webhookPromise = null;
 
       console.error(
-        'Webhook error:',
+        'Webhook setup error:',
         error
       );
 
-      return res.sendStatus(200);
-    }
+      throw error;
+    });
+
+  return webhookPromise;
+}
+
+/* =========================================================
+   CHANNEL API
+========================================================= */
+
+app.get(
+  '/api/gate/channels',
+  async (req, res) => {
+
+    await initDatabase();
+
+    const channels =
+      await getRequiredChannels();
+
+    res.json({
+      ok: true,
+      channels
+    });
   }
 );
 
+/* =========================================================
+   CHANNEL CHECK API
+========================================================= */
 
-// =========================================================
-// AUTH
-// =========================================================
+app.post(
+  '/api/gate/check',
+  auth,
+  async (req, res) => {
+
+    const user =
+      req.tgUser;
+
+    const result =
+      await checkAllRequiredChannels(
+        user.id
+      );
+
+    if (!result.ok) {
+
+      return res.status(403).json({
+        ok: false,
+
+        status:
+          'channels_required',
+
+        missing:
+          result.missing
+      });
+    }
+
+    res.json({
+      ok: true,
+      status:
+        'channels_joined'
+    });
+  }
+);
+
+/* =========================================================
+   MINI APP AUTH
+
+   This is the final server-side protection.
+
+   Even if someone directly opens the Mini App,
+   they still cannot bypass the security.
+========================================================= */
 
 app.post(
   '/api/auth',
@@ -1582,98 +1943,74 @@ app.post(
           'x-init-data'
         ];
 
-      const deviceId =
-        String(
-          req.headers[
-            'x-device'
-          ] || ''
-        ).trim();
-
-      // ---------------------------------------------------
-      // VERIFY TELEGRAM
-      // ---------------------------------------------------
-
-      const verification =
-        verifyTelegramInitData(
+      const verified =
+        verifyInitData(
           initData
         );
 
-      if (!verification.ok) {
+      if (!verified) {
 
         return res.status(401).json({
-
           ok: false,
-
-          status:
-            'invalid',
-
+          status: 'invalid',
           message:
-            verification.reason
+            'Invalid Telegram authentication.'
         });
       }
 
       const user =
-        verification.user;
+        verified.user;
 
-      const telegramId =
-        Number(user.id);
+      await ensureUser(
+        user,
+        null
+      );
 
-      const username =
-        user.username || '';
+      /* ---------- CHANNEL GATE ---------- */
 
-      const firstName =
-        user.first_name || '';
-
-      // ---------------------------------------------------
-      // IP / DEVICE
-      // ---------------------------------------------------
-
-      const ip =
-        getClientIP(req);
-
-      const ipHash =
-        sha256(ip);
-
-      const deviceHash =
-        sha256(deviceId);
-
-      // ---------------------------------------------------
-      // EXISTING USER
-      // ---------------------------------------------------
-
-      const existing =
-        await pool.query(
-          `
-          SELECT *
-          FROM fraud_users
-          WHERE telegram_id = $1
-          LIMIT 1
-          `,
-          [telegramId]
+      const channelCheck =
+        await checkAllRequiredChannels(
+          user.id
         );
 
-      // ===================================================
-      // ALREADY BANNED
-      // ===================================================
+      if (!channelCheck.ok) {
+
+        return res.status(403).json({
+
+          ok: false,
+
+          status:
+            'channels_required',
+
+          message:
+            'Please join all required channels.',
+
+          missing:
+            channelCheck.missing
+        });
+      }
+
+      /* ---------- EXISTING BAN ---------- */
+
+      const existing =
+        await q(
+          `
+          SELECT
+            status,
+            ban_reason
+          FROM fraud_users
+          WHERE telegram_id=$1
+          LIMIT 1
+          `,
+          [user.id]
+        );
 
       if (
-        existing.rows.length > 0 &&
+        existing.rows.length &&
         existing.rows[0].status ===
           'banned'
       ) {
 
-        const banType =
-          getBanType(
-            existing.rows[0]
-              .ban_reason
-          );
-
-        // Send the same reason again
-        await sendBanMessage(
-          telegramId,
-          banType
-        );
-
         return res.status(403).json({
 
           ok: false,
@@ -1683,810 +2020,1187 @@ app.post(
 
           reason:
             existing.rows[0]
-              .ban_reason,
-
-          message:
-            'Your account has been permanently banned.'
+              .ban_reason || 'other'
         });
       }
 
-      // ===================================================
-      // MULTI ACCOUNT CHECK
-      // (checked FIRST: a multi-account match should ban
-      // even on a connection that would otherwise just
-      // look like a normal VPN)
-      // ===================================================
+      /* ---------- SECURITY ---------- */
 
-      const multiAccount =
-        await detectMultiAccount(
-          telegramId,
-          ipHash,
-          deviceHash
+      const security =
+        await runSecurityVerification(
+          user,
+          req
         );
 
-      // ===================================================
-      // VPN / PROXY CHECK
-      // ===================================================
+      if (!security.ok) {
 
-      const networkCheck =
-        await detectVPNProxy(ip);
-
-      // ===================================================
-      // MULTI ACCOUNT BAN
-      // ===================================================
-
-      if (
-        multiAccount.detected
-      ) {
-
-        await pool.query(
-          `
-          INSERT INTO fraud_users (
-            telegram_id,
-            username,
-            first_name,
-            ip_hash,
-            device_hash,
-            vpn_detected,
-            proxy_detected,
-            risk_score,
-            status,
-            ban_reason,
-            last_seen,
-            request_count
-          )
-          VALUES (
-            $1,$2,$3,$4,$5,FALSE,FALSE,$6,'banned',$7,NOW(),1
-          )
-
-          ON CONFLICT (telegram_id)
-          DO UPDATE SET
-
-            username =
-              EXCLUDED.username,
-
-            first_name =
-              EXCLUDED.first_name,
-
-            ip_hash =
-              EXCLUDED.ip_hash,
-
-            device_hash =
-              EXCLUDED.device_hash,
-
-            risk_score =
-              EXCLUDED.risk_score,
-
-            status =
-              'banned',
-
-            ban_reason =
-              EXCLUDED.ban_reason,
-
-            last_seen =
-              NOW(),
-
-            request_count =
-              fraud_users.request_count + 1
-          `,
-          [
-
-            telegramId,
-
-            username,
-
-            firstName,
-
-            ipHash,
-
-            deviceHash,
-
-            100,
-
-            multiAccount.reason
-          ]
+        return res.status(403).json(
+          security
         );
-
-        // -----------------------------------------------
-        // Direct Telegram message
-        // -----------------------------------------------
-
-        await sendBanMessage(
-          telegramId,
-          'multi'
-        );
-
-        return res.status(403).json({
-
-          ok: false,
-
-          status:
-            'banned',
-
-          reason:
-            multiAccount.reason,
-
-          message:
-            'Multiple accounts detected. Your account has been permanently banned.'
-        });
       }
 
-      // ===================================================
-      // VPN / PROXY BAN
-      // ===================================================
+      /* ---------- SUCCESS ---------- */
 
-      if (
-        networkCheck.detected
-      ) {
-
-        const reason =
-          networkCheck.vpn
-            ? 'VPN detected'
-            : networkCheck.proxy
-              ? 'Proxy detected'
-              : networkCheck.tor
-                ? 'Tor detected'
-                : 'Restricted network detected';
-
-        await pool.query(
-          `
-          INSERT INTO fraud_users (
-            telegram_id,
-            username,
-            first_name,
-            ip_hash,
-            device_hash,
-            vpn_detected,
-            proxy_detected,
-            risk_score,
-            status,
-            ban_reason,
-            last_seen,
-            request_count
-          )
-          VALUES (
-            $1,$2,$3,$4,$5,$6,$7,$8,'banned',$9,NOW(),1
-          )
-
-          ON CONFLICT (telegram_id)
-          DO UPDATE SET
-
-            username =
-              EXCLUDED.username,
-
-            first_name =
-              EXCLUDED.first_name,
-
-            ip_hash =
-              EXCLUDED.ip_hash,
-
-            device_hash =
-              EXCLUDED.device_hash,
-
-            vpn_detected =
-              EXCLUDED.vpn_detected,
-
-            proxy_detected =
-              EXCLUDED.proxy_detected,
-
-            risk_score =
-              EXCLUDED.risk_score,
-
-            status =
-              'banned',
-
-            ban_reason =
-              EXCLUDED.ban_reason,
-
-            last_seen =
-              NOW(),
-
-            request_count =
-              fraud_users.request_count + 1
-          `,
-          [
-
-            telegramId,
-
-            username,
-
-            firstName,
-
-            ipHash,
-
-            deviceHash,
-
-            networkCheck.vpn ||
-              networkCheck.tor,
-
-            networkCheck.proxy,
-
-            100,
-
-            reason
-          ]
-        );
-
-        // -----------------------------------------------
-        // Direct Telegram message
-        // -----------------------------------------------
-
-        await sendBanMessage(
-          telegramId,
-          'vpn'
-        );
-
-        return res.status(403).json({
-
-          ok: false,
-
-          status:
-            'banned',
-
-          reason,
-
-          message:
-            'VPN/Proxy detected. Your account has been permanently banned.'
-        });
-      }
-
-      // ===================================================
-      // NORMAL USER
-      // ===================================================
-
-      await pool.query(
+      await q(
         `
-        INSERT INTO fraud_users (
-          telegram_id,
-          username,
-          first_name,
-          ip_hash,
-          device_hash,
-          vpn_detected,
-          proxy_detected,
-          risk_score,
-          status,
-          ban_reason,
-          last_seen,
-          request_count
-        )
-        VALUES (
-          $1,$2,$3,$4,$5,FALSE,FALSE,0,'verified','',NOW(),1
-        )
-
-        ON CONFLICT (telegram_id)
-        DO UPDATE SET
-
-          username =
-            EXCLUDED.username,
-
-          first_name =
-            EXCLUDED.first_name,
-
-          ip_hash =
-            EXCLUDED.ip_hash,
-
-          device_hash =
-            EXCLUDED.device_hash,
-
-          status =
-            'verified',
-
-          last_seen =
-            NOW(),
-
-          request_count =
-            fraud_users.request_count + 1
+        UPDATE users
+        SET
+          last_ip=$2,
+          updated_at=NOW()
+        WHERE id=$1
         `,
         [
-
-          telegramId,
-
-          username,
-
-          firstName,
-
-          ipHash,
-
-          deviceHash
+          user.id,
+          getClientIP(req)
         ]
       );
 
-      // ===================================================
-      // SUCCESS MESSAGE
-      // ===================================================
-
-      const current =
-        await pool.query(
-          `
-          SELECT
-            verification_message_sent
-          FROM fraud_users
-          WHERE telegram_id = $1
-          `,
-          [telegramId]
-        );
-
-      const messageAlreadySent =
-        current.rows[0]
-          ?.verification_message_sent;
-
-      if (
-        !messageAlreadySent
-      ) {
-
-        const sent =
-          await sendVerificationSuccess(
-            user
-          );
-
-        if (sent) {
-
-          await pool.query(
-            `
-            UPDATE fraud_users
-            SET
-              verification_message_sent = TRUE
-            WHERE telegram_id = $1
-            `,
-            [telegramId]
-          );
-        }
-      }
-
-      return res.json({
-
+      res.json({
         ok: true,
 
         status:
           'verified',
 
-        message:
-          'Your verification is successfully.'
+        user: {
+          id: user.id,
+
+          first_name:
+            user.first_name || '',
+
+          username:
+            user.username || ''
+        },
+
+        checks: {
+          multi_account:
+            'NO',
+
+          vpn_proxy:
+            'YES'
+        }
       });
 
     } catch (error) {
 
       console.error(
-        'AUTH ERROR:',
+        '/api/auth error:',
         error
       );
 
-      return res.status(500).json({
-
+      res.status(500).json({
         ok: false,
-
         status:
           'error',
 
         message:
-          'Verification server error.'
+          'Server error.'
       });
     }
   }
 );
 
-
-// =========================================================
-// ADMIN GET USER
-// =========================================================
+/* =========================================================
+   ADMIN OVERVIEW
+========================================================= */
 
 app.get(
-  '/api/admin/user/:id',
+  '/api/admin/overview',
+  auth,
+  adminOnly,
   async (req, res) => {
 
-    try {
+    const settings =
+      await getSettings();
 
-      await initDatabase();
-
-      const id =
-        Number(req.params.id);
-
-      if (
-        !Number.isFinite(id)
-      ) {
-
-        return res.status(400).json({
-
-          ok: false,
-
-          error:
-            'Invalid user ID'
-        });
-      }
-
-      const result =
-        await pool.query(
-          `
-          SELECT *
-          FROM fraud_users
-          WHERE telegram_id = $1
-          `,
-          [id]
-        );
-
-      return res.json({
-
-        ok: true,
-
-        user:
-          result.rows[0] || null
-      });
-
-    } catch (error) {
-
-      console.error(
-        'Admin user error:',
-        error
-      );
-
-      return res.status(500).json({
-
-        ok: false,
-
-        error:
-          error.message
-      });
-    }
-  }
-);
-
-
-// =========================================================
-// ADMIN BAN
-// =========================================================
-
-app.post(
-  '/api/admin/ban/:id',
-  async (req, res) => {
-
-    try {
-
-      await initDatabase();
-
-      const id =
-        Number(req.params.id);
-
-      await pool.query(
+    const users =
+      await q(
         `
-        UPDATE fraud_users
-        SET
-          status = 'banned',
-          ban_reason = 'Admin ban',
-          last_seen = NOW()
-        WHERE telegram_id = $1
-        `,
-        [id]
-      );
-
-      return res.json({
-
-        ok: true,
-
-        message:
-          'User permanently banned.'
-      });
-
-    } catch (error) {
-
-      console.error(
-        'Admin ban error:',
-        error
-      );
-
-      return res.status(500).json({
-
-        ok: false,
-
-        error:
-          error.message
-      });
-    }
-  }
-);
-
-
-// =========================================================
-// ADMIN UNBAN
-// =========================================================
-
-app.post(
-  '/api/admin/unban/:id',
-  async (req, res) => {
-
-    try {
-
-      await initDatabase();
-
-      const id =
-        Number(req.params.id);
-
-      await pool.query(
+        SELECT COUNT(*)::int AS count
+        FROM users
         `
-        UPDATE fraud_users
-        SET
-          status = 'verified',
-          ban_reason = '',
-          vpn_detected = FALSE,
-          proxy_detected = FALSE,
-          risk_score = 0,
-          ban_message_sent = FALSE,
-          last_seen = NOW()
-        WHERE telegram_id = $1
-        `,
-        [id]
       );
 
-      return res.json({
-
-        ok: true,
-
-        message:
-          'User unbanned.'
-      });
-
-    } catch (error) {
-
-      console.error(
-        'Admin unban error:',
-        error
+    const banned =
+      await q(
+        `
+        SELECT COUNT(*)::int AS count
+        FROM fraud_users
+        WHERE status='banned'
+        `
       );
 
-      return res.status(500).json({
+    const withdrawals =
+      await q(
+        `
+        SELECT COUNT(*)::int AS count
+        FROM withdrawals
+        WHERE status='pending'
+        `
+      );
 
-        ok: false,
+    const channels =
+      await getRequiredChannels();
 
-        error:
-          error.message
-      });
-    }
+    res.json({
+
+      ok: true,
+
+      users:
+        users.rows[0].count,
+
+      banned_users:
+        banned.rows[0].count,
+
+      pending_withdrawals:
+        withdrawals.rows[0].count,
+
+      channels,
+
+      settings
+    });
   }
 );
 
-
-// =========================================================
-// ADMIN: LIST GATE CHANNELS
-// =========================================================
-
-app.get(
-  '/api/admin/channels',
-  async (req, res) => {
-
-    try {
-
-      await initDatabase();
-
-      const result =
-        await pool.query(
-          `
-          SELECT *
-          FROM gate_channels
-          ORDER BY position ASC, id ASC
-          `
-        );
-
-      return res.json({
-
-        ok: true,
-
-        channels:
-          result.rows
-      });
-
-    } catch (error) {
-
-      console.error(
-        'List channels error:',
-        error
-      );
-
-      return res.status(500).json({
-
-        ok: false,
-
-        error:
-          error.message
-      });
-    }
-  }
-);
-
-
-// =========================================================
-// ADMIN: ADD GATE CHANNEL
-// =========================================================
+/* =========================================================
+   ADMIN: ADD REQUIRED CHANNEL
+========================================================= */
 
 app.post(
-  '/api/admin/channels',
+  '/api/admin/channel',
+  auth,
+  adminOnly,
   async (req, res) => {
 
-    try {
+    const {
+      channel_id,
+      username,
+      title,
+      invite_url,
+      enabled = true,
+      required = true,
+      sort_order = 0
+    } = req.body || {};
 
-      await initDatabase();
+    if (
+      !channel_id
+    ) {
 
-      const {
-        chat_username,
-        title,
-        invite_link,
-        position
-      } = req.body || {};
-
-      if (!chat_username) {
-
-        return res.status(400).json({
-
-          ok: false,
-
-          error:
-            'chat_username is required'
-        });
-      }
-
-      const result =
-        await pool.query(
-          `
-          INSERT INTO gate_channels (
-            chat_username,
-            title,
-            invite_link,
-            position
-          )
-          VALUES ($1,$2,$3,$4)
-          RETURNING *
-          `,
-          [
-            chat_username,
-            title || '',
-            invite_link || '',
-            Number(position) || 0
-          ]
-        );
-
-      return res.json({
-
-        ok: true,
-
-        channel:
-          result.rows[0]
-      });
-
-    } catch (error) {
-
-      console.error(
-        'Add channel error:',
-        error
+      return fail(
+        res,
+        400,
+        'channel_id_required'
       );
-
-      return res.status(500).json({
-
-        ok: false,
-
-        error:
-          error.message
-      });
     }
+
+    await q(
+      `
+      INSERT INTO required_channels(
+        channel_id,
+        username,
+        title,
+        invite_url,
+        enabled,
+        required,
+        sort_order
+      )
+      VALUES($1,$2,$3,$4,$5,$6,$7)
+      ON CONFLICT(channel_id)
+      DO UPDATE SET
+        username=$2,
+        title=$3,
+        invite_url=$4,
+        enabled=$5,
+        required=$6,
+        sort_order=$7,
+        updated_at=NOW()
+      `,
+      [
+        String(channel_id),
+        username || '',
+        title || '',
+        invite_url || '',
+        Boolean(enabled),
+        Boolean(required),
+        Number(sort_order) || 0
+      ]
+    );
+
+    res.json({
+      ok: true
+    });
   }
 );
 
-
-// =========================================================
-// ADMIN: UPDATE GATE CHANNEL (edit fields / toggle active)
-// =========================================================
-
-app.post(
-  '/api/admin/channels/:id',
-  async (req, res) => {
-
-    try {
-
-      await initDatabase();
-
-      const id =
-        Number(req.params.id);
-
-      const {
-        chat_username,
-        title,
-        invite_link,
-        position,
-        active
-      } = req.body || {};
-
-      const result =
-        await pool.query(
-          `
-          UPDATE gate_channels
-          SET
-            chat_username =
-              COALESCE($2, chat_username),
-
-            title =
-              COALESCE($3, title),
-
-            invite_link =
-              COALESCE($4, invite_link),
-
-            position =
-              COALESCE($5, position),
-
-            active =
-              COALESCE($6, active)
-          WHERE id = $1
-          RETURNING *
-          `,
-          [
-            id,
-            chat_username,
-            title,
-            invite_link,
-            position,
-            active
-          ]
-        );
-
-      return res.json({
-
-        ok: true,
-
-        channel:
-          result.rows[0] || null
-      });
-
-    } catch (error) {
-
-      console.error(
-        'Update channel error:',
-        error
-      );
-
-      return res.status(500).json({
-
-        ok: false,
-
-        error:
-          error.message
-      });
-    }
-  }
-);
-
-
-// =========================================================
-// ADMIN: DELETE GATE CHANNEL
-// =========================================================
+/* =========================================================
+   ADMIN: DELETE CHANNEL
+========================================================= */
 
 app.delete(
-  '/api/admin/channels/:id',
+  '/api/admin/channel/:id',
+  auth,
+  adminOnly,
   async (req, res) => {
 
-    try {
+    await q(
+      `
+      DELETE FROM required_channels
+      WHERE id=$1
+      `,
+      [req.params.id]
+    );
 
-      await initDatabase();
+    res.json({
+      ok: true
+    });
+  }
+);
 
-      const id =
-        Number(req.params.id);
+/* =========================================================
+   ADMIN: TOGGLE CHANNEL
+========================================================= */
 
-      await pool.query(
+app.post(
+  '/api/admin/channel/:id/toggle',
+  auth,
+  adminOnly,
+  async (req, res) => {
+
+    await q(
+      `
+      UPDATE required_channels
+      SET
+        enabled=NOT enabled,
+        updated_at=NOW()
+      WHERE id=$1
+      `,
+      [req.params.id]
+    );
+
+    res.json({
+      ok: true
+    });
+  }
+);
+
+/* =========================================================
+   ADMIN: BAN USER
+========================================================= */
+
+app.post(
+  '/api/admin/ban',
+  auth,
+  adminOnly,
+  async (req, res) => {
+
+    const {
+      id,
+      reason = 'manual'
+    } = req.body || {};
+
+    if (
+      !/^\d+$/.test(
+        String(id || '')
+      )
+    ) {
+
+      return fail(
+        res,
+        400,
+        'bad_user_id'
+      );
+    }
+
+    await q(
+      `
+      INSERT INTO fraud_users(
+        telegram_id,
+        status,
+        ban_reason,
+        ban_source,
+        risk_score
+      )
+      VALUES(
+        $1,
+        'banned',
+        $2,
+        'manual',
+        100
+      )
+      ON CONFLICT(telegram_id)
+      DO UPDATE SET
+        status='banned',
+        ban_reason=$2,
+        ban_source='manual',
+        risk_score=100,
+        last_seen=NOW()
+      `,
+      [
+        id,
+        String(reason)
+      ]
+    );
+
+    await q(
+      `
+      UPDATE users
+      SET banned=TRUE
+      WHERE id=$1
+      `,
+      [id]
+    );
+
+    await sendBanMessage(
+      id,
+      reason
+    );
+
+    res.json({
+      ok: true
+    });
+  }
+);
+
+/* =========================================================
+   ADMIN: UNBAN USER
+========================================================= */
+
+app.post(
+  '/api/admin/unban',
+  auth,
+  adminOnly,
+  async (req, res) => {
+
+    const {
+      id
+    } = req.body || {};
+
+    if (
+      !/^\d+$/.test(
+        String(id || '')
+      )
+    ) {
+
+      return fail(
+        res,
+        400,
+        'bad_user_id'
+      );
+    }
+
+    await q(
+      `
+      UPDATE fraud_users
+      SET
+        status='pending',
+        ban_reason='',
+        ban_source='',
+        risk_score=0,
+        ban_message_sent=FALSE,
+        verification_message_sent=FALSE,
+        last_seen=NOW()
+      WHERE telegram_id=$1
+      `,
+      [id]
+    );
+
+    await q(
+      `
+      UPDATE users
+      SET banned=FALSE
+      WHERE id=$1
+      `,
+      [id]
+    );
+
+    res.json({
+      ok: true
+    });
+  }
+);
+
+/* =========================================================
+   ADMIN: BANNED USERS
+========================================================= */
+
+app.get(
+  '/api/admin/banned-users',
+  auth,
+  adminOnly,
+  async (req, res) => {
+
+    const result =
+      await q(
         `
-        DELETE FROM gate_channels
-        WHERE id = $1
+        SELECT
+          telegram_id,
+          username,
+          first_name,
+          ban_reason,
+          ban_source,
+          risk_score,
+          first_seen,
+          last_seen
+        FROM fraud_users
+        WHERE status='banned'
+        ORDER BY last_seen DESC
+        LIMIT 500
+        `
+      );
+
+    res.json({
+      ok: true,
+      users:
+        result.rows
+    });
+  }
+);
+
+/* =========================================================
+   ADMIN: SETTING
+========================================================= */
+
+app.post(
+  '/api/admin/setting',
+  auth,
+  adminOnly,
+  async (req, res) => {
+
+    const {
+      key,
+      value
+    } = req.body || {};
+
+    if (!key) {
+
+      return fail(
+        res,
+        400,
+        'key_required'
+      );
+    }
+
+    await q(
+      `
+      INSERT INTO settings(
+        key,
+        value,
+        updated_at
+      )
+      VALUES(
+        $1,
+        $2::jsonb,
+        NOW()
+      )
+      ON CONFLICT(key)
+      DO UPDATE SET
+        value=$2::jsonb,
+        updated_at=NOW()
+      `,
+      [
+        key,
+        JSON.stringify(value)
+      ]
+    );
+
+    settingsCache.time = 0;
+
+    res.json({
+      ok: true
+    });
+  }
+);
+
+/* =========================================================
+   ADMIN: USER ACTION
+========================================================= */
+
+app.post(
+  '/api/admin/user',
+  auth,
+  adminOnly,
+  async (req, res) => {
+
+    const {
+      id,
+      action
+    } = req.body || {};
+
+    if (
+      !/^\d+$/.test(
+        String(id || '')
+      )
+    ) {
+
+      return fail(
+        res,
+        400,
+        'bad_user_id'
+      );
+    }
+
+    if (
+      action === 'ban'
+    ) {
+
+      await q(
+        `
+        UPDATE users
+        SET banned=TRUE
+        WHERE id=$1
         `,
         [id]
       );
 
-      return res.json({
-        ok: true
-      });
+      await q(
+        `
+        INSERT INTO fraud_users(
+          telegram_id,
+          status,
+          ban_reason,
+          ban_source,
+          risk_score
+        )
+        VALUES(
+          $1,
+          'banned',
+          'manual',
+          'manual',
+          100
+        )
+        ON CONFLICT(telegram_id)
+        DO UPDATE SET
+          status='banned',
+          ban_reason='manual',
+          ban_source='manual',
+          risk_score=100
+        `,
+        [id]
+      );
+
+    } else if (
+      action === 'unban'
+    ) {
+
+      await q(
+        `
+        UPDATE users
+        SET banned=FALSE
+        WHERE id=$1
+        `,
+        [id]
+      );
+
+      await q(
+        `
+        UPDATE fraud_users
+        SET
+          status='pending',
+          ban_reason='',
+          ban_source='',
+          risk_score=0
+        WHERE telegram_id=$1
+        `,
+        [id]
+      );
+
+    } else if (
+      action === 'unflag'
+    ) {
+
+      await q(
+        `
+        UPDATE users
+        SET flagged=FALSE
+        WHERE id=$1
+        `,
+        [id]
+      );
+
+    } else {
+
+      return fail(
+        res,
+        400,
+        'bad_action'
+      );
+    }
+
+    res.json({
+      ok: true
+    });
+  }
+);
+
+/* =========================================================
+   TELEGRAM WEBHOOK
+========================================================= */
+
+async function handleTelegramUpdate(
+  update
+) {
+
+  /* =======================================================
+     CALLBACK QUERY
+  ======================================================= */
+
+  if (
+    update.callback_query
+  ) {
+
+    const callback =
+      update.callback_query;
+
+    const data =
+      callback.data || '';
+
+    const user =
+      callback.from;
+
+    const chatId =
+      callback.message?.chat?.id ||
+      user?.id;
+
+    if (
+      data ===
+      'gate_joined'
+    ) {
+
+      await initDatabase();
+
+      const check =
+        await checkAllRequiredChannels(
+          user.id
+        );
+
+      if (!check.ok) {
+
+        const names =
+          check.missing
+            .map(
+              x =>
+                x.title ||
+                x.username ||
+                'channel'
+            )
+            .join(', ');
+
+        await tg(
+          'answerCallbackQuery',
+          {
+            callback_query_id:
+              callback.id,
+
+            text:
+              '❌ You have not joined all required channels.',
+
+            show_alert: true
+          }
+        );
+
+        await tg(
+          'sendMessage',
+          {
+            chat_id: chatId,
+
+            text:
+              '❌ Please join all required channels first.\n\n' +
+              `Missing: ${names}`,
+
+            reply_markup:
+              buildChannelKeyboard(
+                await getRequiredChannels()
+              )
+          }
+        );
+
+        return;
+      }
+
+      /* ---------- EXISTING BAN ---------- */
+
+      const banned =
+        await q(
+          `
+          SELECT
+            status,
+            ban_reason
+          FROM fraud_users
+          WHERE telegram_id=$1
+          LIMIT 1
+          `,
+          [user.id]
+        );
+
+      if (
+        banned.rows.length &&
+        banned.rows[0].status ===
+          'banned'
+      ) {
+
+        await sendBanMessage(
+          chatId,
+          banned.rows[0]
+            .ban_reason
+        );
+
+        await tg(
+          'answerCallbackQuery',
+          {
+            callback_query_id:
+              callback.id,
+
+            text:
+              'Account banned.',
+
+            show_alert: true
+          }
+        );
+
+        return;
+      }
+
+      /* ---------- SECURITY ---------- */
+
+      const fakeReq = {
+        headers: {},
+        socket: {
+          remoteAddress: ''
+        }
+      };
+
+      /*
+       * Bot-side callback does not expose the same
+       * browser IP/device headers as the Mini App.
+       *
+       * Full security verification is therefore also
+       * enforced again by /api/auth when the Mini App opens.
+       */
+
+      await tg(
+        'answerCallbackQuery',
+        {
+          callback_query_id:
+            callback.id,
+
+          text:
+            '✅ Channels verified.'
+        }
+      );
+
+      await tg(
+        'sendMessage',
+        {
+          chat_id: chatId,
+
+          text:
+            '🔐 Channels verified.\n\n' +
+            'Open Adewa to complete security verification.',
+
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text:
+                    '🚀 OPEN ADEWA',
+
+                  web_app: {
+                    url:
+                      MINI_APP_URL
+                  }
+                }
+              ]
+            ]
+          }
+        }
+      );
+
+      return;
+    }
+
+    return;
+  }
+
+  /* =======================================================
+     MESSAGE
+  ======================================================= */
+
+  if (
+    !update.message
+  ) {
+    return;
+  }
+
+  const message =
+    update.message;
+
+  const user =
+    message.from;
+
+  const chatId =
+    message.chat?.id;
+
+  if (!user || !chatId) {
+    return;
+  }
+
+  const text =
+    typeof message.text ===
+    'string'
+      ? message.text.trim()
+      : '';
+
+  await initDatabase();
+
+  /* =======================================================
+     /START
+  ======================================================= */
+
+  if (
+    text === '/start' ||
+    text.startsWith('/start ')
+  ) {
+
+    const parts =
+      text.split(' ');
+
+    let referralId =
+      null;
+
+    const startParam =
+      parts[1] || '';
+
+    const match =
+      /^ref_(\d+)$/.exec(
+        startParam
+      );
+
+    if (match) {
+      referralId =
+        match[1];
+    }
+
+    await ensureUser(
+      user,
+      referralId
+    );
+
+    /*
+     * IMPORTANT:
+     *
+     * Even banned users receive the channel gate first.
+     *
+     * Ban is checked AFTER "Joined".
+     */
+
+    await sendChannelGate(
+      chatId
+    );
+
+    return;
+  }
+
+  /* =======================================================
+     /BAN
+  ======================================================= */
+
+  if (
+    text.startsWith('/ban')
+  ) {
+
+    if (
+      !isAdmin(user.id)
+    ) {
+
+      await tg(
+        'sendMessage',
+        {
+          chat_id: chatId,
+          text:
+            '❌ Admin only.'
+        }
+      );
+
+      return;
+    }
+
+    const parts =
+      text.split(/\s+/);
+
+    const targetId =
+      parts[1];
+
+    const reason =
+      parts
+        .slice(2)
+        .join(' ') ||
+      'manual';
+
+    if (
+      !/^\d+$/.test(
+        targetId || ''
+      )
+    ) {
+
+      await tg(
+        'sendMessage',
+        {
+          chat_id: chatId,
+
+          text:
+            'Usage:\n/ban <telegram_id> [reason]'
+        }
+      );
+
+      return;
+    }
+
+    await q(
+      `
+      INSERT INTO fraud_users(
+        telegram_id,
+        status,
+        ban_reason,
+        ban_source,
+        risk_score
+      )
+      VALUES(
+        $1,
+        'banned',
+        $2,
+        'manual',
+        100
+      )
+      ON CONFLICT(telegram_id)
+      DO UPDATE SET
+        status='banned',
+        ban_reason=$2,
+        ban_source='manual',
+        risk_score=100,
+        last_seen=NOW()
+      `,
+      [
+        targetId,
+        reason
+      ]
+    );
+
+    await q(
+      `
+      UPDATE users
+      SET banned=TRUE
+      WHERE id=$1
+      `,
+      [targetId]
+    );
+
+    await sendBanMessage(
+      targetId,
+      reason
+    );
+
+    await tg(
+      'sendMessage',
+      {
+        chat_id: chatId,
+
+        text:
+          `✅ User ${targetId} has been banned.`
+      }
+    );
+
+    return;
+  }
+
+  /* =======================================================
+     /UNBAN
+  ======================================================= */
+
+  if (
+    text.startsWith('/unban')
+  ) {
+
+    if (
+      !isAdmin(user.id)
+    ) {
+
+      await tg(
+        'sendMessage',
+        {
+          chat_id: chatId,
+          text:
+            '❌ Admin only.'
+        }
+      );
+
+      return;
+    }
+
+    const parts =
+      text.split(/\s+/);
+
+    const targetId =
+      parts[1];
+
+    if (
+      !/^\d+$/.test(
+        targetId || ''
+      )
+    ) {
+
+      await tg(
+        'sendMessage',
+        {
+          chat_id: chatId,
+
+          text:
+            'Usage:\n/unban <telegram_id>'
+        }
+      );
+
+      return;
+    }
+
+    await q(
+      `
+      UPDATE fraud_users
+      SET
+        status='pending',
+        ban_reason='',
+        ban_source='',
+        risk_score=0,
+        ban_message_sent=FALSE,
+        verification_message_sent=FALSE,
+        last_seen=NOW()
+      WHERE telegram_id=$1
+      `,
+      [targetId]
+    );
+
+    await q(
+      `
+      UPDATE users
+      SET banned=FALSE
+      WHERE id=$1
+      `,
+      [targetId]
+    );
+
+    await tg(
+      'sendMessage',
+      {
+        chat_id: chatId,
+
+        text:
+          `✅ User ${targetId} has been unbanned.\n\n` +
+          'They must join the required channels and complete security verification again.'
+      }
+    );
+
+    return;
+  }
+}
+
+/* =========================================================
+   TELEGRAM WEBHOOK ENDPOINT
+========================================================= */
+
+app.post(
+  '/telegram/webhook',
+  async (req, res) => {
+
+    const incomingSecret =
+      req.headers[
+        'x-telegram-bot-api-secret-token'
+      ];
+
+    if (
+      incomingSecret !==
+      WEBHOOK_SECRET
+    ) {
+
+      return res.sendStatus(
+        403
+      );
+    }
+
+    try {
+
+      await handleTelegramUpdate(
+        req.body || {}
+      );
 
     } catch (error) {
 
       console.error(
-        'Delete channel error:',
+        'Telegram webhook error:',
         error
       );
+    }
 
-      return res.status(500).json({
+    res.sendStatus(200);
+  }
+);
 
+/* =========================================================
+   COMPATIBILITY WEBHOOK
+========================================================= */
+
+app.post(
+  '/api/webhook',
+  async (req, res) => {
+
+    const incomingSecret =
+      req.headers[
+        'x-telegram-bot-api-secret-token'
+      ];
+
+    if (
+      WEBHOOK_SECRET &&
+      incomingSecret !==
+        WEBHOOK_SECRET
+    ) {
+
+      return res.sendStatus(
+        403
+      );
+    }
+
+    try {
+
+      await handleTelegramUpdate(
+        req.body || {}
+      );
+
+    } catch (error) {
+
+      console.error(
+        'Compatibility webhook error:',
+        error
+      );
+    }
+
+    res.sendStatus(200);
+  }
+);
+
+/* =========================================================
+   HEALTH / WEBHOOK SETUP
+========================================================= */
+
+app.get(
+  '/setup-webhook',
+  async (req, res) => {
+
+    try {
+
+      const result =
+        await setupWebhook();
+
+      res.json(result);
+
+    } catch (error) {
+
+      res.status(500).json({
         ok: false,
 
         error:
@@ -2496,59 +3210,80 @@ app.delete(
   }
 );
 
+/* =========================================================
+   AUTO WEBHOOK SETUP ON ROOT
+========================================================= */
 
-// =========================================================
-// LOCAL SERVER
-// =========================================================
+app.get(
+  '/health',
+  async (req, res) => {
+
+    try {
+
+      await initDatabase();
+      await setupWebhook();
+
+      res.json({
+        ok: true,
+        app: 'Adewa',
+        status: 'online'
+      });
+
+    } catch (error) {
+
+      res.status(500).json({
+        ok: false,
+        error:
+          error.message
+      });
+    }
+  }
+);
+
+/* =========================================================
+   STARTUP
+========================================================= */
+
+async function startup() {
+
+  try {
+
+    await initDatabase();
+
+    await setupWebhook();
+
+    console.log(
+      'Adewa backend started.'
+    );
+
+  } catch (error) {
+
+    console.error(
+      'Startup error:',
+      error
+    );
+  }
+}
+
+startup();
+
+/* =========================================================
+   EXPORT
+========================================================= */
+
+module.exports = app;
 
 if (
   require.main === module
 ) {
 
-  initDatabase()
+  app.listen(
+    PORT,
+    () => {
 
-    .then(() =>
-      setupWebhook()
-    )
-
-    .then(() => {
-
-      app.listen(
-        PORT,
-        () => {
-
-          console.log(
-            `Adewa server running on port ${PORT}`
-          );
-        }
+      console.log(
+        `Adewa server running on port ${PORT}`
       );
-
-    })
-
-    .catch((error) => {
-
-      console.error(
-        'Startup error:',
-        error
-      );
-
-      process.exit(1);
-    });
+    }
+  );
 }
-
-
-// =========================================================
-// VERCEL
-// =========================================================
-
-if (
-  process.env.VERCEL ||
-  process.env.VERCEL_ENV
-) {
-
-  setupWebhook()
-    .catch(() => {});
-}
-
-
-module.exports = app;
