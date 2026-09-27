@@ -1,12 +1,12 @@
 {
-  "name": "adewa-telegram-bot",
+  "name": "adewa-mini-app",
   "version": "1.0.0",
-  "type": "commonjs",
-  "main": "bot.js",
+  "private": true,
   "scripts": {
-    "start": "node bot.js"
+    "start": "node server.js"
   },
   "dependencies": {
-    "node-telegram-bot-api": "^0.66.0"
+    "express": "^5.1.0",
+    "pg": "^8.16.3"
   }
 }
