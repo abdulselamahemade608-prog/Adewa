@@ -1,100 +1,153 @@
 'use strict';
 
-const TelegramBot = require('node-telegram-bot-api');
+const express = require('express');
+
+const app = express();
+app.use(express.json());
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
+// GitHub Pages frontend — ይህን አትቀይር
 const MINI_APP_URL =
   'https://abdulselamahemade608-prog.github.io/Adewa-frontend/';
 
-if (!BOT_TOKEN) {
-  throw new Error('BOT_TOKEN is missing');
-}
-
-const bot = new TelegramBot(BOT_TOKEN, {
-  polling: true
-});
-
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'adewa_webhook_2026';
 
 /*
-=========================================================
-START COMMAND
-=========================================================
+|--------------------------------------------------------------------------
+| Telegram API
+|--------------------------------------------------------------------------
 */
 
-bot.onText(/^\/start(?:\s.*)?$/i, async (msg) => {
+async function telegram(method, data) {
+  const response = await fetch(
+    `https://api.telegram.org/bot${BOT_TOKEN}/${method}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(data)
+    }
+  );
+
+  return response.json();
+}
+
+/*
+|--------------------------------------------------------------------------
+| START COMMAND
+|--------------------------------------------------------------------------
+*/
+
+async function handleStart(msg) {
+  if (!msg || !msg.chat) return;
 
   const chatId = msg.chat.id;
+  const firstName = msg.from?.first_name || 'User';
 
-  const firstName =
-    msg.from?.first_name || 'User';
+  await telegram('sendMessage', {
+    chat_id: chatId,
 
+    text:
+      `👋 Hello ${firstName}!\n\n` +
+      `💰 Welcome to Adewa.\n\n` +
+      `Complete tasks, ads and surveys\n` +
+      `and earn rewards.\n\n` +
+      `👇 Tap the button below to open Adewa:`,
+
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: '🚀 OPEN ADEWA',
+            web_app: {
+              url: MINI_APP_URL
+            }
+          }
+        ]
+      ]
+    }
+  });
+}
+
+/*
+|--------------------------------------------------------------------------
+| WEBHOOK
+|--------------------------------------------------------------------------
+*/
+
+app.post('/telegram/webhook', async (req, res) => {
   try {
 
-    await bot.sendMessage(
-      chatId,
+    // Security check
+    const secret =
+      req.headers['x-telegram-bot-api-secret-token'];
 
-      `👋 Hello ${firstName}!
+    if (secret !== WEBHOOK_SECRET) {
+      return res.sendStatus(403);
+    }
 
-💰 Welcome to Adewa.
+    const update = req.body;
 
-Complete tasks, surveys and ads
-and earn rewards.
+    if (update?.message?.text) {
 
-👇 Open the Mini App below:`,
+      const text = update.message.text.trim();
 
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: '🚀 OPEN ADEWA',
-                web_app: {
-                  url: MINI_APP_URL
-                }
-              }
-            ]
-          ]
-        }
+      // /start
+      if (/^\/start(?:\s.*)?$/i.test(text)) {
+        await handleStart(update.message);
       }
-    );
+
+    }
+
+    return res.sendStatus(200);
 
   } catch (error) {
 
-    console.error(
-      'Telegram /start error:',
-      error
-    );
+    console.error('Telegram webhook error:', error);
 
+    // Telegram should still receive 200
+    return res.sendStatus(200);
   }
-
 });
 
-
 /*
-=========================================================
-BOT STATUS
-=========================================================
+|--------------------------------------------------------------------------
+| TEST
+|--------------------------------------------------------------------------
 */
 
-bot.getMe()
-  .then((me) => {
-
-    console.log(
-      `Bot connected: @${me.username}`
-    );
-
-    console.log(
-      'Mini App:',
-      MINI_APP_URL
-    );
-
-  })
-  .catch((error) => {
-
-    console.error(
-      'Bot connection error:',
-      error
-    );
-
+app.get('/', (req, res) => {
+  res.json({
+    ok: true,
+    app: 'Adewa Telegram Bot',
+    bot: 'webhook',
+    mini_app: MINI_APP_URL
   });
+});
+
+/*
+|--------------------------------------------------------------------------
+| HEALTH
+|--------------------------------------------------------------------------
+*/
+
+app.get('/api/health', (req, res) => {
+  res.json({
+    ok: true,
+    bot: true
+  });
+});
+
+/*
+|--------------------------------------------------------------------------
+| LOCAL SERVER
+|--------------------------------------------------------------------------
+*/
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`Adewa bot running on port ${PORT}`);
+});
