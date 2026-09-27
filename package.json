@@ -1,12 +1,12 @@
 {
-  "name": "telegram-miniapp-antifraud",
+  "name": "adewa-telegram-bot",
   "version": "1.0.0",
-  "type": "module",
+  "type": "commonjs",
+  "main": "bot.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node bot.js"
   },
   "dependencies": {
-    "express": "^5.1.0",
-    "pg": "^8.16.3"
+    "node-telegram-bot-api": "^0.66.0"
   }
 }
