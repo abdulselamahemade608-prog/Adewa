@@ -45,15 +45,39 @@ const DEFAULT_SETTINGS = {
   ad_reward: '5',
   ad_min_seconds: '8',
   adsgram_block_id: '50476',
-  adsbitvex_zone: '',
-  adsbitvex_script: 'https://sdk.adsbitvex.com/functions/v1/ad-script?appid=000463',
+  monetag_zone: '',
   birr_per_coin: '0.05',
   usdt_per_coin: '0.0004',
   min_withdraw_coins: '2000',
   referral_required: '5',
   referral_ad_days: '2',
-  spin_rewards: '1,2,3,5,8,10'
+  spin_rewards: '1,2,3,5,8,10',
+  // ---- v2 settings (all editable from the Admin panel) ----
+  referral_reward: '100',
+  ref_fraud_threshold: '3',
+  streak_bonus_days: '3',
+  streak_bonus_coins: '20',
+  ad_cooldown_seconds: '15',
+  pop_gap_seconds: '40',
+  idle_ad_gap_seconds: '180',
+  wd_required_ads: '3',
+  wd_max_coins: '50000',
+  wd_cooldown_hours: '24',
+  bot_daily_cap_usdt: '100',
+  service_fee_percent: '25',
+  wd_src_ads: '1',
+  wd_src_invite: '1',
+  wd_src_task: '1',
+  maintenance: '0',
+  support_username: '',
+  proof_channel_id: '',
+  lb_prize_1: '500',
+  lb_prize_2: '300',
+  lb_prize_3: '100',
+  group_add_daily_max: '20'
 };
+
+const MAINT_MSG = 'Bot is temporarily under maintenance. Please try again later.';
 
 const SETTING_KEYS = Object.keys(DEFAULT_SETTINGS);
 
@@ -219,6 +243,47 @@ function initDatabase() {
       value TEXT NOT NULL DEFAULT ''
     )`);
 
+    // ---- v2 columns / tables ----
+    await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS b_ads BIGINT NOT NULL DEFAULT 0`);
+    await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS b_invite BIGINT NOT NULL DEFAULT 0`);
+    await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS b_task BIGINT NOT NULL DEFAULT 0`);
+    await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ref_stage INTEGER NOT NULL DEFAULT 0`);
+    await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ref_paid_total BIGINT NOT NULL DEFAULT 0`);
+    await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ref_left_count INTEGER NOT NULL DEFAULT 0`);
+    await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS extra_ads INTEGER NOT NULL DEFAULT 0`);
+    await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS has_photo BOOLEAN NOT NULL DEFAULT FALSE`);
+    await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS lb_blocked BOOLEAN NOT NULL DEFAULT FALSE`);
+    await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_reminded TIMESTAMPTZ`);
+    await q(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_wd_at TIMESTAMPTZ`);
+    // Existing balances become "ads" balance once, so nobody loses withdrawable coins.
+    await q(`UPDATE users SET b_ads = coins WHERE b_ads = 0 AND b_invite = 0 AND b_task = 0 AND coins > 0`);
+
+    await q(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS target_members INTEGER NOT NULL DEFAULT 0`);
+    await q(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS reward_ads INTEGER NOT NULL DEFAULT 0`);
+
+    await q(`ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS fee_usdt NUMERIC NOT NULL DEFAULT 0`);
+    await q(`ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS tx_hash TEXT NOT NULL DEFAULT ''`);
+    await q(`ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS tx_url TEXT NOT NULL DEFAULT ''`);
+
+    await q(`CREATE TABLE IF NOT EXISTS group_adds (
+      id BIGSERIAL PRIMARY KEY,
+      task_id INTEGER NOT NULL,
+      adder_id BIGINT NOT NULL,
+      member_id BIGINT NOT NULL,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (task_id, member_id)
+    )`);
+    await q(`CREATE INDEX IF NOT EXISTS group_adds_adder_idx ON group_adds (task_id, adder_id)`);
+
+    await q(`CREATE TABLE IF NOT EXISTS ad_pops (
+      id BIGSERIAL PRIMARY KEY,
+      telegram_id BIGINT NOT NULL,
+      purpose TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    await q(`CREATE INDEX IF NOT EXISTS ad_pops_user_idx ON ad_pops (telegram_id, purpose, created_at)`);
+
     console.log('Database initialized.');
   })().catch((error) => {
     databaseReady = null;
@@ -360,6 +425,11 @@ async function requireUser(req) {
   const f = await pool.query('SELECT status FROM fraud_users WHERE telegram_id = $1', [v.user.id]);
   if (!f.rows.length || f.rows[0].status !== 'verified') throw new HttpError(403, 'Account is not verified.');
 
+  if (!isAdmin(v.user.id)) {
+    const m = await pool.query("SELECT value FROM settings WHERE key = 'maintenance'");
+    if (m.rows[0] && m.rows[0].value === '1') throw new HttpError(503, MAINT_MSG);
+  }
+
   await ensureUser(pool, v.user);
   return v.user;
 }
@@ -402,15 +472,27 @@ async function ensureUser(db, from, referrer = null) {
   );
 }
 
+// Which "wallet bucket" an earning belongs to (admin can allow/deny withdrawing each bucket).
+const BUCKET = { referral: 'b_invite', task: 'b_task', grouptask: 'b_task' };
+
 async function credit(db, id, amount, kind, ref = '') {
+  const col = BUCKET[kind] || 'b_ads';
   await db.query(
-    'UPDATE users SET coins = coins + $2, total_earned = total_earned + $2 WHERE telegram_id = $1',
+    `UPDATE users SET coins = coins + $2, total_earned = total_earned + $2, ${col} = ${col} + $2 WHERE telegram_id = $1`,
     [id, amount]
   );
   await db.query('INSERT INTO ledger (telegram_id, amount, kind, ref) VALUES ($1,$2,$3,$4)', [id, amount, kind, ref]);
 }
 
-async function touchStreak(id) {
+function withdrawableOf(row, s) {
+  const sum =
+    (s.wd_src_ads === '1' ? Math.max(Number(row.b_ads), 0) : 0) +
+    (s.wd_src_invite === '1' ? Math.max(Number(row.b_invite), 0) : 0) +
+    (s.wd_src_task === '1' ? Math.max(Number(row.b_task), 0) : 0);
+  return Math.max(0, Math.min(Number(row.coins), sum));
+}
+
+async function touchStreak(id, s) {
   const today = dayKey();
   const yesterday = dayKey(new Date(Date.now() - 86400000));
   const r = await pool.query('SELECT streak, best_streak, last_active FROM users WHERE telegram_id = $1', [id]);
@@ -422,6 +504,18 @@ async function touchStreak(id) {
     'UPDATE users SET streak = $2, best_streak = GREATEST(best_streak, $2), last_active = $3 WHERE telegram_id = $1',
     [id, streak, today]
   );
+
+  // Streak bonus (admin-configurable): every N days in a row pays a flat bonus.
+  const every = Number(s?.streak_bonus_days) || 0;
+  const bonus = Number(s?.streak_bonus_coins) || 0;
+  if (every > 0 && bonus > 0 && streak % every === 0) {
+    const ref = `streak:${today}`;
+    const dup = await pool.query("SELECT 1 FROM ledger WHERE telegram_id = $1 AND kind = 'streak' AND ref = $2", [id, ref]);
+    if (!dup.rows.length) {
+      await credit(pool, id, bonus, 'streak', ref);
+      await sendTelegramMessage(id, `${streak}-day streak! +${bonus} bonus coins added.`);
+    }
+  }
 }
 
 async function referralStats(id, needDays) {
@@ -484,15 +578,17 @@ async function checkAllChannelsJoined(channels, userId) {
 
 async function sendChannelGate(chatId, firstName) {
   const channels = await getRequiredChannels();
+  const s = await getSettings();
+  const help = s.support_username ? `\n\nNeed help or found a problem? Contact @${String(s.support_username).replace('@', '')}` : '';
   const openButton = { inline_keyboard: [[{ text: 'Open Adewa', web_app: { url: MINI_APP_URL } }]] };
 
   if (!channels.length) {
-    return sendTelegramMessage(chatId, `Hello ${firstName}\n\nWelcome to Adewa.`, { reply_markup: openButton });
+    return sendTelegramMessage(chatId, `Hello ${firstName}\n\nWelcome to Adewa.${help}`, { reply_markup: openButton });
   }
 
   return sendTelegramMessage(
     chatId,
-    `ውድ ${firstName} እንኳን በሰላም መጡ!\n\nእባክዎ ከታች ያሉትን ቻናሎች ሁሉ ይቀላቀሉ፣ ከዚያ "Joined" የሚለውን ይጫኑ።`,
+    `Dear ${firstName}, welcome!\n\nPlease join all the channels below, then tap "Joined".${help}`,
     { reply_markup: buildChannelKeyboard(channels) }
   );
 }
@@ -638,7 +734,7 @@ async function setupWebhook() {
   webhookPromise = telegram('setWebhook', {
     url: WEBHOOK_URL,
     secret_token: WEBHOOK_SECRET,
-    allowed_updates: ['message', 'callback_query'],
+    allowed_updates: ['message', 'callback_query', 'chat_member'],
     drop_pending_updates: false
   }).catch((error) => {
     webhookPromise = null;
@@ -794,6 +890,35 @@ async function handleCallback(callback) {
     return;
   }
 
+  // ---- Admin: withdrawal Paid / Reject (inline buttons on the request message) ----
+  if (data.startsWith('wp:') || data.startsWith('wr:')) {
+    if (!isAdmin(userId)) return answer('Not allowed.', true);
+    const wid = Number(data.slice(3));
+    try {
+      if (data.startsWith('wp:')) await approveWithdrawal(wid);
+      else await rejectWithdrawal(wid);
+    } catch (e) {
+      return answer(e.message || 'Failed.', true);
+    }
+    await answer(data.startsWith('wp:') ? 'Paid' : 'Rejected');
+    await telegram('editMessageReplyMarkup', {
+      chat_id: chatId, message_id: callback.message.message_id, reply_markup: { inline_keyboard: [] }
+    }).catch(() => {});
+    await sendTelegramMessage(chatId, `Withdrawal #${wid}: ${data.startsWith('wp:') ? 'paid' : 'rejected'}.`);
+    return;
+  }
+
+  // ---- Admin: unban from a review notice ----
+  if (data.startsWith('ub:')) {
+    if (!isAdmin(userId)) return answer('Not allowed.', true);
+    await unbanUserById(Number(data.slice(3)));
+    await answer('Unbanned');
+    await telegram('editMessageReplyMarkup', {
+      chat_id: chatId, message_id: callback.message.message_id, reply_markup: { inline_keyboard: [] }
+    }).catch(() => {});
+    return;
+  }
+
   // ---- "Joined" button ----
   if (data === 'check_joined' && chatId && userId) {
     const b = (await pool.query('SELECT status, ban_reason FROM fraud_users WHERE telegram_id = $1 LIMIT 1', [userId])).rows[0];
@@ -807,10 +932,10 @@ async function handleCallback(callback) {
     const channels = await getRequiredChannels();
     const { allJoined, missing } = await checkAllChannelsJoined(channels, userId);
 
-    if (!allJoined) return answer(`እባክዎ መጀመሪያ ሁሉንም ቻናሎች ይቀላቀሉ:\n${missing.join(', ')}`, true);
+    if (!allJoined) return answer(`Please join all channels first:\n${missing.join(', ')}`, true);
 
     await answer('Verified');
-    await sendTelegramMessage(chatId, 'ሁሉንም ቻናሎች ተቀላቅለዋል። ወደ Adewa ይግቡ።', {
+    await sendTelegramMessage(chatId, 'You joined all channels. Open Adewa to continue.', {
       reply_markup: { inline_keyboard: [[{ text: 'Open Adewa', web_app: { url: MINI_APP_URL } }]] }
     });
   }
@@ -834,6 +959,11 @@ async function handleMessage(message) {
   if (command === '/start') {
     const payload = text.split(' ')[1] || '';
     const referrer = payload.startsWith('ref_') ? Number(payload.slice(4)) || null : null;
+
+    if (!isAdmin(from.id)) {
+      const m = await pool.query("SELECT value FROM settings WHERE key = 'maintenance'");
+      if (m.rows[0] && m.rows[0].value === '1') return sendTelegramMessage(chatId, MAINT_MSG);
+    }
 
     await ensureUser(pool, from, referrer);
 
@@ -869,6 +999,7 @@ app.post('/telegram/webhook', async (req, res) => {
 
     if (update.callback_query) await handleCallback(update.callback_query);
     else if (update.message) await handleMessage(update.message);
+    else if (update.chat_member) await handleChatMember(update.chat_member);
 
     return res.sendStatus(200);
   } catch (error) {
@@ -888,6 +1019,13 @@ app.post('/api/auth', route(async (req, res) => {
   const user = v.user;
   const telegramId = Number(user.id);
   const username = user.username || '';
+
+  if (!isAdmin(telegramId)) {
+    const mm = await pool.query("SELECT value FROM settings WHERE key = 'maintenance'");
+    if (mm.rows[0] && mm.rows[0].value === '1') {
+      return res.status(503).json({ ok: false, status: 'maintenance', message: MAINT_MSG });
+    }
+  }
   const firstName = user.first_name || '';
 
   const deviceId = String(req.headers['x-device'] || '').trim();
@@ -947,6 +1085,14 @@ app.post('/api/auth', route(async (req, res) => {
 
   await ensureUser(pool, user);
 
+  // Accounts without a username or profile photo do not count for referrals / group tasks.
+  let hasPhoto = false;
+  try {
+    const ph = await telegram('getUserProfilePhotos', { user_id: telegramId, limit: 1 });
+    hasPhoto = (ph.result?.total_count || 0) > 0;
+  } catch (e) { /* ignore */ }
+  await pool.query('UPDATE users SET has_photo = $2 WHERE telegram_id = $1', [telegramId, hasPhoto]);
+
   const sent = (await pool.query('SELECT verification_message_sent FROM fraud_users WHERE telegram_id = $1', [telegramId])).rows[0];
   if (!sent?.verification_message_sent) {
     if (await sendTelegramMessage(telegramId, 'Your verification is successful.')) {
@@ -963,28 +1109,54 @@ app.post('/api/auth', route(async (req, res) => {
 
 app.get('/api/me', route(async (req, res) => {
   const u = await requireUser(req);
-  await touchStreak(u.id);
-
   const s = await getSettings();
+  await touchStreak(u.id, s);
   const today = dayKey();
 
   const row = (await pool.query('SELECT * FROM users WHERE telegram_id = $1', [u.id])).rows[0];
-  const watched = Number((await pool.query('SELECT COUNT(*) AS c FROM ad_views WHERE telegram_id = $1 AND day = $2', [u.id, today])).rows[0].c);
+  const adq = (await pool.query('SELECT COUNT(*) FILTER (WHERE day = $2)::int AS c, MAX(created_at) AS last FROM ad_views WHERE telegram_id = $1', [u.id, today])).rows[0];
   const spun = (await pool.query('SELECT 1 FROM spins WHERE telegram_id = $1 AND day = $2', [u.id, today])).rows.length > 0;
   const refs = await referralStats(u.id, Number(s.referral_ad_days));
+  const rd = (await pool.query(
+    `SELECT COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE ref_stage >= 1)::int AS verified,
+            COUNT(*) FILTER (WHERE ref_stage = 0)::int AS pending,
+            COUNT(*) FILTER (WHERE ref_stage < 0)::int AS left_count
+     FROM users WHERE referred_by = $1`, [u.id]
+  )).rows[0];
+  const earnedRef = Number((await pool.query(
+    "SELECT COALESCE(SUM(amount),0) AS s FROM ledger WHERE telegram_id = $1 AND kind IN ('referral','referral_left')", [u.id]
+  )).rows[0].s);
+
+  const cd = Number(s.ad_cooldown_seconds) || 0;
+  const cooldownLeft = adq.last ? Math.max(0, Math.ceil(cd - (Date.now() - new Date(adq.last).getTime()) / 1000)) : 0;
+  const wdCdH = Number(s.wd_cooldown_hours) || 0;
+  const wdLeftH = row.last_wd_at ? Math.max(0, wdCdH - (Date.now() - new Date(row.last_wd_at).getTime()) / 3600000) : 0;
 
   res.json({
     ok: true,
     admin: isAdmin(u.id),
     bot_username: BOT_USERNAME,
+    support: s.support_username,
     user: { id: u.id, first_name: row.first_name, username: row.username },
     coins: Number(row.coins),
     total_earned: Number(row.total_earned),
     streak: row.streak,
     best_streak: row.best_streak,
-    rates: { birr_per_coin: Number(s.birr_per_coin), usdt_per_coin: Number(s.usdt_per_coin) },
+    streak_bonus: { days: Number(s.streak_bonus_days), coins: Number(s.streak_bonus_coins) },
+    rates: { usdt_per_coin: Number(s.usdt_per_coin) },
     app_name: s.app_name,
-    ads: { watched, limit: Number(s.ad_daily_limit), reward: Number(s.ad_reward), enabled: s.ads_enabled === '1' },
+    ads: {
+      watched: adq.c,
+      limit: Number(s.ad_daily_limit) + Number(row.extra_ads || 0),
+      reward: Number(s.ad_reward),
+      enabled: s.ads_enabled === '1',
+      cooldown: cd,
+      cooldown_left: cooldownLeft
+    },
+    ad_cfg: { adsgram_block_id: s.adsgram_block_id, monetag_zone: s.monetag_zone },
+    pop_gap: Number(s.pop_gap_seconds) || 40,
+    idle_gap: Number(s.idle_ad_gap_seconds) || 180,
     spin: {
       available: !spun && s.spin_enabled === '1',
       enabled: s.spin_enabled === '1',
@@ -994,9 +1166,24 @@ app.get('/api/me', route(async (req, res) => {
       total: refs.total,
       active: refs.active,
       required: Number(s.referral_required),
-      ad_days: Number(s.referral_ad_days)
+      ad_days: Number(s.referral_ad_days),
+      reward: Number(s.referral_reward),
+      verified: rd.verified,
+      pending: rd.pending,
+      left: rd.left_count,
+      earned: earnedRef
     },
-    withdraw: { min_coins: Number(s.min_withdraw_coins), methods: ['bep20', 'ton'].filter((m) => s['wd_' + m + '_enabled'] === '1') }
+    lb_prizes: [Number(s.lb_prize_1), Number(s.lb_prize_2), Number(s.lb_prize_3)],
+    withdraw: {
+      min_coins: Number(s.min_withdraw_coins),
+      max_coins: Number(s.wd_max_coins),
+      cooldown_hours: wdCdH,
+      cooldown_left_hours: Math.round(wdLeftH * 10) / 10,
+      fee_percent: Number(s.service_fee_percent),
+      required_ads: Number(s.wd_required_ads),
+      withdrawable: withdrawableOf(row, s),
+      methods: ['bep20', 'ton'].filter((m) => s['wd_' + m + '_enabled'] === '1')
+    }
   });
 }));
 
@@ -1009,11 +1196,22 @@ app.post('/api/ads/start', route(async (req, res) => {
   const s = await getSettings();
   if (s.ads_enabled !== '1') throw new HttpError(503, 'Ads are currently turned off.');
 
-  const watched = Number((await pool.query('SELECT COUNT(*) AS c FROM ad_views WHERE telegram_id = $1 AND day = $2', [u.id, dayKey()])).rows[0].c);
-  if (watched >= Number(s.ad_daily_limit)) throw new HttpError(429, 'Daily ad limit reached. Come back tomorrow.');
+  const row = (await pool.query('SELECT extra_ads FROM users WHERE telegram_id = $1', [u.id])).rows[0];
+  const limit = Number(s.ad_daily_limit) + Number(row.extra_ads || 0);
+  const st = (await pool.query(
+    'SELECT COUNT(*) FILTER (WHERE day = $2)::int AS c, MAX(created_at) AS last FROM ad_views WHERE telegram_id = $1', [u.id, dayKey()]
+  )).rows[0];
+  if (st.c >= limit) throw new HttpError(429, 'Daily ad limit reached. Come back tomorrow.');
 
-  // Alternate providers in turn.
-  const order = watched % 2 === 0 ? ['adsgram', 'adsbitvex'] : ['adsbitvex', 'adsgram'];
+  // Smart cooldown between two ads (admin-configurable).
+  const cd = Number(s.ad_cooldown_seconds) || 0;
+  if (cd > 0 && st.last) {
+    const left = Math.ceil(cd - (Date.now() - new Date(st.last).getTime()) / 1000);
+    if (left > 0) throw new HttpError(429, `Please wait ${left}s before the next ad.`);
+  }
+
+  // Only Adsgram and Monetag, alternating.
+  const order = st.c % 2 === 0 ? ['adsgram', 'monetag'] : ['monetag', 'adsgram'];
   const token = crypto.randomBytes(16).toString('hex');
 
   await pool.query('INSERT INTO ad_sessions (token, telegram_id, provider) VALUES ($1,$2,$3)', [token, u.id, order[0]]);
@@ -1023,11 +1221,7 @@ app.post('/api/ads/start', route(async (req, res) => {
     token,
     provider: order[0],
     fallback: order[1],
-    config: {
-      adsgram_block_id: s.adsgram_block_id,
-      adsbitvex_zone: s.adsbitvex_zone,
-      adsbitvex_script: s.adsbitvex_script
-    }
+    config: { adsgram_block_id: s.adsgram_block_id, monetag_zone: s.monetag_zone }
   });
 }));
 
@@ -1035,7 +1229,7 @@ app.post('/api/ads/complete', route(async (req, res) => {
   const u = await requireUser(req);
   const s = await getSettings();
   const token = String(req.body?.token || '');
-  const provider = ['adsgram', 'adsbitvex'].includes(req.body?.provider) ? req.body.provider : '';
+  const provider = ['adsgram', 'monetag'].includes(req.body?.provider) ? req.body.provider : '';
 
   const reward = Number(s.ad_reward);
   const minSeconds = Number(s.ad_min_seconds);
@@ -1048,15 +1242,28 @@ app.post('/api/ads/complete', route(async (req, res) => {
     const elapsed = (Date.now() - new Date(ses.started_at).getTime()) / 1000;
     if (elapsed < minSeconds) throw new HttpError(400, 'Ad was not completed.');
 
+    const ex = (await c.query('SELECT extra_ads FROM users WHERE telegram_id = $1', [u.id])).rows[0];
+    const limit = Number(s.ad_daily_limit) + Number(ex.extra_ads || 0);
     const watched = Number((await c.query('SELECT COUNT(*) AS c FROM ad_views WHERE telegram_id = $1 AND day = $2', [u.id, today])).rows[0].c);
-    if (watched >= Number(s.ad_daily_limit)) throw new HttpError(429, 'Daily ad limit reached.');
+    if (watched >= limit) throw new HttpError(429, 'Daily ad limit reached.');
 
     await c.query('UPDATE ad_sessions SET used = TRUE WHERE token = $1', [token]);
     await c.query('INSERT INTO ad_views (telegram_id, day, provider) VALUES ($1,$2,$3)', [u.id, today, provider]);
     await credit(c, u.id, reward, 'ad', provider);
   });
 
+  // Referral bonus protection: the inviter is only paid after real activity.
+  try { await checkReferralProgress(u.id); } catch (e) { console.error('Referral check error:', e.message); }
+
   res.json({ ok: true, reward });
+}));
+
+// Short "pop" ads (button clicks, idle screen, withdraw gate). No coins, just a recorded impression.
+app.post('/api/pop', route(async (req, res) => {
+  const u = await requireUser(req);
+  const purpose = ['click', 'idle', 'withdraw'].includes(req.body?.purpose) ? req.body.purpose : 'click';
+  await pool.query('INSERT INTO ad_pops (telegram_id, purpose) VALUES ($1,$2)', [u.id, purpose]);
+  res.json({ ok: true });
 }));
 
 /* =========================================================
@@ -1067,7 +1274,8 @@ app.get('/api/tasks', route(async (req, res) => {
   const u = await requireUser(req);
 
   const r = await pool.query(
-    `SELECT t.*, c.status AS my_status
+    `SELECT t.*, c.status AS my_status,
+            (SELECT COUNT(*)::int FROM group_adds g WHERE g.task_id = t.id AND g.adder_id = $1 AND g.active = TRUE) AS progress
      FROM tasks t
      LEFT JOIN task_completions c ON c.task_id = t.id AND c.telegram_id = $1
      WHERE t.active = TRUE AND (c.status IS NULL OR c.status = 'pending')
@@ -1080,23 +1288,29 @@ app.get('/api/tasks', route(async (req, res) => {
     tasks: r.rows.map((t) => ({
       id: t.id, kind: t.kind, title: t.title, description: t.description,
       link: taskLink(t), provider: t.provider, reward: t.reward,
+      target_members: t.target_members, reward_ads: t.reward_ads, progress: t.progress,
       remaining: Math.max(t.max_users - t.done_count, 0), my_status: t.my_status || ''
     }))
   });
 }));
 
-// Channel / group tasks: verified automatically through the Telegram API.
+// Channel tasks (Telegram membership check) and Group tasks (auto-counted members added).
 app.post('/api/tasks/:id/claim', route(async (req, res) => {
   const u = await requireUser(req);
   const id = Number(req.params.id);
 
-  const t = (await pool.query("SELECT * FROM tasks WHERE id = $1 AND active = TRUE AND kind = 'channel'", [id])).rows[0];
+  const t = (await pool.query("SELECT * FROM tasks WHERE id = $1 AND active = TRUE AND kind IN ('channel','group')", [id])).rows[0];
   if (!t) throw new HttpError(404, 'Task is not available.');
 
   const done = await pool.query('SELECT 1 FROM task_completions WHERE task_id = $1 AND telegram_id = $2', [id, u.id]);
   if (done.rows.length) throw new HttpError(409, 'You already completed this task.');
 
-  if (!(await isChatMember(t.chat_id, u.id))) throw new HttpError(422, 'Join the channel or group first, then verify again.');
+  if (t.kind === 'channel') {
+    if (!(await isChatMember(t.chat_id, u.id))) throw new HttpError(422, 'Join the channel or group first, then verify again.');
+  } else {
+    const p = (await pool.query('SELECT COUNT(*)::int AS c FROM group_adds WHERE task_id = $1 AND adder_id = $2 AND active = TRUE', [id, u.id])).rows[0].c;
+    if (p < t.target_members) throw new HttpError(422, `Progress ${p}/${t.target_members}. Add more real members to finish.`);
+  }
 
   await withTx(async (c) => {
     const lock = (await c.query('SELECT * FROM tasks WHERE id = $1 FOR UPDATE', [id])).rows[0];
@@ -1110,10 +1324,13 @@ app.post('/api/tasks/:id/claim', route(async (req, res) => {
 
     const next = lock.done_count + 1;
     await c.query('UPDATE tasks SET done_count = $2, active = $3 WHERE id = $1', [id, next, next < lock.max_users]);
-    await credit(c, u.id, lock.reward, 'task', `task:${id}`);
+    await credit(c, u.id, lock.reward, lock.kind === 'group' ? 'grouptask' : 'task', `task:${id}`);
+    if (lock.kind === 'group' && lock.reward_ads > 0) {
+      await c.query('UPDATE users SET extra_ads = extra_ads + $2 WHERE telegram_id = $1', [u.id, lock.reward_ads]);
+    }
   });
 
-  res.json({ ok: true, reward: t.reward });
+  res.json({ ok: true, reward: t.reward, reward_ads: t.kind === 'group' ? t.reward_ads : 0 });
 }));
 
 /* =========================================================
@@ -1176,15 +1393,13 @@ app.get('/api/leaderboard', route(async (req, res) => {
     `SELECT first_name, username, total_earned FROM users
      WHERE referred_by = $1 ORDER BY total_earned DESC LIMIT 10`, [u.id]
   );
-  const top = await pool.query(
-    `SELECT telegram_id, first_name, username, total_earned FROM users
-     WHERE total_earned > 0 ORDER BY total_earned DESC LIMIT 15`
-  );
+  const { from, to } = weekRange(0);
+  const top = await weeklyTop(from, to, 10);
 
   res.json({
     ok: true,
     invitees: mine.rows.map((r) => ({ name: displayName(r), earned: Number(r.total_earned) })),
-    top: top.rows.map((r) => ({ name: displayName(r), earned: Number(r.total_earned), me: Number(r.telegram_id) === Number(u.id) }))
+    top: top.map((r) => ({ name: displayName(r), earned: Number(r.earned), me: Number(r.telegram_id) === Number(u.id) }))
   });
 }));
 
@@ -1195,7 +1410,7 @@ app.get('/api/leaderboard', route(async (req, res) => {
 app.get('/api/withdrawals', route(async (req, res) => {
   const u = await requireUser(req);
   const r = await pool.query(
-    'SELECT id, method, address, coins, amount_birr, amount_usdt, status, created_at FROM withdrawals WHERE telegram_id = $1 ORDER BY id DESC LIMIT 20',
+    'SELECT id, method, address, coins, amount_usdt, fee_usdt, tx_url, status, created_at FROM withdrawals WHERE telegram_id = $1 ORDER BY id DESC LIMIT 20',
     [u.id]
   );
   res.json({ ok: true, withdrawals: r.rows });
@@ -1214,30 +1429,74 @@ app.post('/api/withdraw', route(async (req, res) => {
   if (method === 'ton' && !/^([A-Za-z0-9_-]{48}|-?\d:[a-fA-F0-9]{64})$/.test(address)) throw new HttpError(400, 'Invalid TON address.');
 
   const min = Number(s.min_withdraw_coins);
+  const max = Number(s.wd_max_coins) || 0;
   if (!Number.isFinite(coins) || coins < min) throw new HttpError(400, `Minimum withdrawal is ${min} coins.`);
+  if (max > 0 && coins > max) throw new HttpError(400, `Maximum withdrawal is ${max} coins.`);
+
+  const row = (await pool.query('SELECT * FROM users WHERE telegram_id = $1', [u.id])).rows[0];
+
+  // Waiting time between two withdrawals.
+  const cdH = Number(s.wd_cooldown_hours) || 0;
+  if (cdH > 0 && row.last_wd_at) {
+    const leftH = cdH - (Date.now() - new Date(row.last_wd_at).getTime()) / 3600000;
+    if (leftH > 0) throw new HttpError(429, `You can request another withdrawal in ${leftH.toFixed(1)} hours.`);
+  }
+
+  // Which earnings may be withdrawn (ads / invites / tasks) is decided by the admin.
+  const can = withdrawableOf(row, s);
+  if (coins > can) throw new HttpError(400, `You can withdraw up to ${can} coins right now. Some of your earnings are not withdrawable.`);
 
   const refs = await referralStats(u.id, Number(s.referral_ad_days));
   if (refs.active < Number(s.referral_required)) {
     throw new HttpError(403, `You need ${s.referral_required} active invited friends (each must watch ads on ${s.referral_ad_days} different days).`);
   }
 
-  const birr = coins * Number(s.birr_per_coin);
+  // Every withdrawal request needs the required ads first.
+  const needAds = Number(s.wd_required_ads) || 0;
+  if (needAds > 0 && s.ads_enabled === '1') {
+    const n = Number((await pool.query(
+      "SELECT COUNT(*) AS c FROM ad_pops WHERE telegram_id = $1 AND purpose = 'withdraw' AND created_at > NOW() - INTERVAL '15 minutes'", [u.id]
+    )).rows[0].c);
+    if (n < needAds) throw new HttpError(400, `Watch ${needAds} ads before requesting a withdrawal.`);
+  }
+
   const usdt = coins * Number(s.usdt_per_coin);
+  const feePct = Math.min(Math.max(Number(s.service_fee_percent) || 0, 0), 100);
+  const fee = usdt * feePct / 100;
+  const finalAmt = usdt - fee;
 
   const id = await withTx(async (c) => {
-    const d = await c.query('UPDATE users SET coins = coins - $2 WHERE telegram_id = $1 AND coins >= $2 RETURNING coins', [u.id, coins]);
-    if (!d.rows.length) throw new HttpError(400, 'Not enough balance.');
+    const cur = (await c.query('SELECT * FROM users WHERE telegram_id = $1 FOR UPDATE', [u.id])).rows[0];
+    if (coins > withdrawableOf(cur, s)) throw new HttpError(400, 'Not enough withdrawable balance.');
 
+    // Take the coins from the buckets the admin allows.
+    let left = coins;
+    const take = { b_ads: 0, b_invite: 0, b_task: 0 };
+    for (const [col, flag] of [['b_ads', 'wd_src_ads'], ['b_invite', 'wd_src_invite'], ['b_task', 'wd_src_task']]) {
+      if (s[flag] !== '1') continue;
+      const t = Math.min(left, Math.max(Number(cur[col]), 0));
+      take[col] = t; left -= t;
+    }
+    await c.query(
+      `UPDATE users SET coins = coins - $2, b_ads = b_ads - $3, b_invite = b_invite - $4, b_task = b_task - $5, last_wd_at = NOW()
+       WHERE telegram_id = $1`,
+      [u.id, coins, take.b_ads, take.b_invite, take.b_task]
+    );
     await c.query('INSERT INTO ledger (telegram_id, amount, kind, ref) VALUES ($1,$2,$3,$4)', [u.id, -coins, 'withdraw', method]);
+    await c.query("DELETE FROM ad_pops WHERE telegram_id = $1 AND purpose = 'withdraw'", [u.id]);
     const w = await c.query(
-      'INSERT INTO withdrawals (telegram_id, method, address, coins, amount_birr, amount_usdt) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
-      [u.id, method, address, coins, birr, usdt]
+      'INSERT INTO withdrawals (telegram_id, method, address, coins, amount_usdt, fee_usdt) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
+      [u.id, method, address, coins, usdt, fee]
     );
     return w.rows[0].id;
   });
 
   await notifyAdmins(
-    `Withdrawal request #${id}\nUser: ${displayName(u)}${u.username ? ' @' + u.username : ''} [${u.id}]\nMethod: ${method.toUpperCase()}\nAddress: ${address}\nCoins: ${coins}\nAmount: ${birr.toFixed(2)} ETB / ${usdt.toFixed(3)} USDT`
+    `Withdrawal request #${id}\nUser: ${displayName(u)}${u.username ? ' @' + u.username : ''} [${u.id}]\nMethod: ${method.toUpperCase()}\nAddress: ${address}\nCoins: ${coins}\nRequested: ${usdt.toFixed(2)} USDT\nService fee (${feePct}%): ${fee.toFixed(2)} USDT\nFinal to pay: ${finalAmt.toFixed(2)} USDT`,
+    { reply_markup: { inline_keyboard: [[
+      { text: 'Paid', callback_data: `wp:${id}` },
+      { text: 'Reject', callback_data: `wr:${id}` }
+    ]] } }
   );
 
   res.json({ ok: true, id });
@@ -1249,6 +1508,7 @@ app.post('/api/withdraw', route(async (req, res) => {
 
 app.get('/api/admin/stats', route(async (req, res) => {
   requireAdmin(req);
+  const today = dayKey();
   const r = await pool.query(`
     SELECT
       (SELECT COUNT(*) FROM fraud_users) AS total,
@@ -1256,9 +1516,20 @@ app.get('/api/admin/stats', route(async (req, res) => {
       (SELECT COUNT(*) FROM fraud_users WHERE status = 'banned') AS banned,
       (SELECT COUNT(*) FROM task_completions WHERE status = 'pending' AND proof_file_id <> '') AS proofs,
       (SELECT COUNT(*) FROM withdrawals WHERE status = 'pending') AS withdrawals,
-      (SELECT COALESCE(SUM(coins),0) FROM users) AS coins_in_wallets
-  `);
-  res.json({ ok: true, stats: r.rows[0] });
+      (SELECT COALESCE(SUM(coins),0) FROM users) AS coins_in_wallets,
+      (SELECT COUNT(*) FROM fraud_users WHERE to_char(last_seen AT TIME ZONE '${TZ}', 'YYYY-MM-DD') = $1) AS active_today,
+      (SELECT COUNT(*) FROM ad_views WHERE day = $1) AS ads_today,
+      (SELECT COALESCE(SUM(amount_usdt - fee_usdt),0) FROM withdrawals WHERE status = 'paid') AS usdt_paid,
+      (SELECT COALESCE(SUM(amount_usdt - fee_usdt),0) FROM withdrawals WHERE status = 'paid'
+         AND to_char(processed_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD') = $1) AS usdt_paid_today,
+      (SELECT COUNT(*) FROM withdrawals) AS wd_total,
+      (SELECT COALESCE(SUM(amount),0) FROM ledger WHERE kind = 'referral') AS ref_bonus_coins
+  `, [today]);
+  const s = await getSettings();
+  const st = r.rows[0];
+  st.ref_bonus_usdt = Number(st.ref_bonus_coins) * Number(s.usdt_per_coin);
+  st.cap_usdt = Number(s.bot_daily_cap_usdt);
+  res.json({ ok: true, stats: st });
 }));
 
 app.get('/api/admin/settings', route(async (req, res) => {
@@ -1341,14 +1612,21 @@ app.post('/api/admin/tasks', route(async (req, res) => {
   const reward = Math.floor(Number(b.reward));
   const maxUsers = Math.floor(Number(b.max_users));
 
-  if (!['channel', 'social', 'partner'].includes(kind)) throw new HttpError(400, 'Invalid task type.');
+  if (!['channel', 'social', 'partner', 'group'].includes(kind)) throw new HttpError(400, 'Invalid task type.');
   if (!title) throw new HttpError(400, 'Title is required.');
-  if (!(reward > 0) || !(maxUsers > 0)) throw new HttpError(400, 'Reward and user limit must be positive numbers.');
+  const targetMembers = Math.floor(Number(b.target_members)) || 0;
+  const rewardAds = Math.floor(Number(b.reward_ads)) || 0;
+  if (kind === 'group') {
+    if (!(targetMembers > 0)) throw new HttpError(400, 'Members to add must be a positive number.');
+    if (!(maxUsers > 0) || !(reward >= 0) || (reward === 0 && rewardAds <= 0)) throw new HttpError(400, 'Set a reward (coins and/or extra daily ads) and a user limit.');
+  } else if (!(reward > 0) || !(maxUsers > 0)) {
+    throw new HttpError(400, 'Reward and user limit must be positive numbers.');
+  }
 
   let chatId = String(b.chat_id || '').trim();
   const link = String(b.link || '').trim();
 
-  if (kind === 'channel') {
+  if (kind === 'channel' || kind === 'group') {
     if (!chatId) throw new HttpError(400, 'Channel or group username is required.');
     if (!chatId.startsWith('@') && !chatId.startsWith('-')) chatId = '@' + chatId;
     if (chatId.startsWith('-') && !link) throw new HttpError(400, 'An invite link is required for private chats.');
@@ -1357,9 +1635,10 @@ app.post('/api/admin/tasks', route(async (req, res) => {
   }
 
   const r = await pool.query(
-    `INSERT INTO tasks (kind, title, description, link, chat_id, provider, reward, max_users)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-    [kind, title, String(b.description || '').trim(), link, chatId, String(b.provider || '').trim(), reward, maxUsers]
+    `INSERT INTO tasks (kind, title, description, link, chat_id, provider, reward, max_users, target_members, reward_ads)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+    [kind, title, String(b.description || '').trim(), link, chatId, String(b.provider || '').trim(), reward, maxUsers,
+     kind === 'group' ? targetMembers : 0, kind === 'group' ? rewardAds : 0]
   );
 
   res.json({ ok: true, task: r.rows[0] });
@@ -1454,37 +1733,42 @@ app.get('/api/admin/withdrawals', route(async (req, res) => {
 
 app.post('/api/admin/withdrawals/:id/paid', route(async (req, res) => {
   requireAdmin(req);
-  const r = await pool.query(
-    "UPDATE withdrawals SET status = 'paid', processed_at = NOW() WHERE id = $1 AND status = 'pending' RETURNING *",
-    [Number(req.params.id)]
-  );
-  if (!r.rows.length) throw new HttpError(409, 'Already processed.');
-  await sendTelegramMessage(r.rows[0].telegram_id, `Your withdrawal #${r.rows[0].id} has been paid.`);
-  res.json({ ok: true });
+  const out = await approveWithdrawal(Number(req.params.id), req.body?.tx);
+  res.json({ ok: true, tx_url: out.url });
 }));
 
 app.post('/api/admin/withdrawals/:id/reject', route(async (req, res) => {
   requireAdmin(req);
-  const w = await withTx(async (c) => {
-    const r = await c.query(
-      "UPDATE withdrawals SET status = 'rejected', processed_at = NOW() WHERE id = $1 AND status = 'pending' RETURNING *",
-      [Number(req.params.id)]
-    );
-    if (!r.rows.length) throw new HttpError(409, 'Already processed.');
-    // Refund the coins (not counted as new earnings).
-    await c.query('UPDATE users SET coins = coins + $2 WHERE telegram_id = $1', [r.rows[0].telegram_id, r.rows[0].coins]);
-    await c.query('INSERT INTO ledger (telegram_id, amount, kind, ref) VALUES ($1,$2,$3,$4)', [r.rows[0].telegram_id, r.rows[0].coins, 'refund', `withdrawal:${r.rows[0].id}`]);
-    return r.rows[0];
-  });
-  await sendTelegramMessage(w.telegram_id, `Your withdrawal #${w.id} was rejected and ${w.coins} coins were returned to your balance.`);
+  await rejectWithdrawal(Number(req.params.id));
   res.json({ ok: true });
 }));
 
-// ---- broadcast ----
+// ---- leaderboard anti-abuse: block / allow an account on the weekly board ----
+app.post('/api/admin/lbblock/:id', route(async (req, res) => {
+  requireAdmin(req);
+  await pool.query('UPDATE users SET lb_blocked = $2 WHERE telegram_id = $1', [Number(req.params.id), req.body?.blocked !== false]);
+  res.json({ ok: true });
+}));
+
+// ---- broadcast: text / image / announcement + optional inline button ----
 app.post('/api/admin/broadcast', route(async (req, res) => {
   requireAdmin(req);
+  const type = ['text', 'image', 'announcement'].includes(req.body?.type) ? req.body.type : 'text';
   const text = String(req.body?.text || '').trim();
-  if (!text) throw new HttpError(400, 'Message is empty.');
+  const image = String(req.body?.image || '').trim();
+  const btnText = String(req.body?.button_text || '').trim();
+  const btnUrl = String(req.body?.button_url || '').trim();
+
+  if (!text && !image) throw new HttpError(400, 'Message is empty.');
+  if (type === 'image' && !image) throw new HttpError(400, 'Add an image URL or Telegram file ID.');
+
+  const body = type === 'announcement' ? `📢 Announcement\n\n${text}` : text;
+  const extra = btnText && /^https?:\/\//.test(btnUrl)
+    ? { reply_markup: { inline_keyboard: [[{ text: btnText, url: btnUrl }]] } } : {};
+
+  const sendOne = (id) => (type === 'image' && image)
+    ? telegram('sendPhoto', { chat_id: id, photo: image, caption: body.slice(0, 1024), ...extra }).then(() => true).catch(() => false)
+    : sendTelegramMessage(id, body, extra);
 
   const r = await pool.query(
     `SELECT u.telegram_id FROM users u
@@ -1498,12 +1782,377 @@ app.post('/api/admin/broadcast', route(async (req, res) => {
   // Telegram allows ~30 messages per second.
   for (let i = 0; i < ids.length; i += 25) {
     const batch = ids.slice(i, i + 25);
-    const results = await Promise.all(batch.map((id) => sendTelegramMessage(id, text)));
+    const results = await Promise.all(batch.map(sendOne));
     sent += results.filter(Boolean).length;
     if (i + 25 < ids.length) await sleep(1050);
   }
 
   res.json({ ok: true, sent, total: ids.length });
+}));
+
+/* =========================================================
+   WITHDRAWAL PAYOUT (auto payment + proof channel)
+   ========================================================= */
+
+const txUrl = (method, tx) => !tx ? '' : (method === 'ton' ? `https://tonviewer.com/transaction/${tx}` : `https://bscscan.com/tx/${tx}`);
+const maskAddr = (a) => `${String(a || '').slice(0, 3)}******`;
+
+// Pays through your payment provider API. Set PAYOUT_API_URL (+ PAYOUT_API_KEY) in the environment.
+// Expected response: { ok: true, tx_hash: "..." }. Without PAYOUT_API_URL the admin pays manually
+// and can paste the transaction hash when approving.
+async function sendAutoPayout(w, finalAmt) {
+  const url = process.env.PAYOUT_API_URL;
+  if (!url) return { auto: false, tx: '' };
+
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.PAYOUT_API_KEY || ''}` },
+    body: JSON.stringify({
+      reference: `wd_${w.id}`,
+      address: w.address,
+      amount: Number(finalAmt.toFixed(6)),
+      currency: 'USDT',
+      network: w.method === 'ton' ? 'TON' : 'BEP20'
+    }),
+    signal: AbortSignal.timeout(25000)
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d.ok === false) throw new Error(d.message || d.error || `Payout API error ${r.status}`);
+  return { auto: true, tx: String(d.tx_hash || d.hash || d.txid || '') };
+}
+
+async function approveWithdrawal(id, manualTx = '') {
+  const s = await getSettings();
+  const cur = (await pool.query('SELECT * FROM withdrawals WHERE id = $1', [id])).rows[0];
+  if (!cur || cur.status !== 'pending') throw new HttpError(409, 'Already processed.');
+
+  const finalAmt = Number(cur.amount_usdt) - Number(cur.fee_usdt);
+
+  // Bot-wide daily payout cap: requests over the cap simply carry over to tomorrow.
+  const cap = Number(s.bot_daily_cap_usdt) || 0;
+  if (cap > 0) {
+    const t = await pool.query(
+      `SELECT COALESCE(SUM(amount_usdt - fee_usdt),0) AS sum FROM withdrawals
+       WHERE status IN ('paid','processing') AND to_char(processed_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD') = $1`,
+      [dayKey()]
+    );
+    if (Number(t.rows[0].sum) + finalAmt > cap) {
+      throw new HttpError(429, `Daily payout cap (${cap} USDT) reached. This request stays pending and carries over to tomorrow.`);
+    }
+  }
+
+  const lock = await pool.query(
+    "UPDATE withdrawals SET status = 'processing', processed_at = NOW() WHERE id = $1 AND status = 'pending' RETURNING *", [id]
+  );
+  if (!lock.rows.length) throw new HttpError(409, 'Already processed.');
+  const w = lock.rows[0];
+
+  let tx = String(manualTx || '').trim();
+  try {
+    if (!tx) tx = (await sendAutoPayout(w, finalAmt)).tx;
+  } catch (e) {
+    await pool.query("UPDATE withdrawals SET status = 'pending', processed_at = NULL WHERE id = $1", [id]);
+    throw new HttpError(502, `Auto payment failed: ${e.message}`);
+  }
+
+  const url = /^https?:\/\//.test(tx) ? tx : txUrl(w.method, tx);
+  await pool.query("UPDATE withdrawals SET status = 'paid', processed_at = NOW(), tx_hash = $2, tx_url = $3 WHERE id = $1", [id, tx, url]);
+
+  await sendTelegramMessage(w.telegram_id,
+    `Your withdrawal #${w.id} has been paid.\nAmount: ${finalAmt.toFixed(2)} USDT${url ? `\nProof: ${url}` : ''}`);
+  await postProof(w, finalAmt, url, s).catch((e) => console.error('Proof post error:', e.message));
+
+  return { url };
+}
+
+async function postProof(w, finalAmt, url, s) {
+  const chan = s.proof_channel_id || process.env.PROOF_CHANNEL_ID;
+  if (!chan) return;
+  const usr = (await pool.query('SELECT username, first_name FROM users WHERE telegram_id = $1', [w.telegram_id])).rows[0] || {};
+  const amount = Number(w.amount_usdt), fee = Number(w.fee_usdt);
+  const pct = amount > 0 ? Math.round((fee / amount) * 100) : 0;
+
+  const text =
+    `💸 New Withdrawal approved\n\n` +
+    `🆔 User ID: ${usr.username ? '@' + usr.username : w.telegram_id}\n` +
+    `📱 ${w.method === 'ton' ? 'Gram' : 'BEP20'} address: ${maskAddr(w.address)}\n` +
+    `💵 Requested Amount: ${amount.toFixed(2)} USDT\n` +
+    `📉 ${pct}% Service Fee: ${fee.toFixed(2)} USDT\n` +
+    `💰 Final Amount: ${finalAmt.toFixed(2)} USDT\n` +
+    `🔍 Status: Paid\n` +
+    `🤖 Bot: ${BOT_USERNAME || 'Adewa'}` +
+    (url ? `\nPayment proof link: ${url}` : '');
+
+  await telegram('sendMessage', { chat_id: chan, text, disable_web_page_preview: true });
+}
+
+async function rejectWithdrawal(id) {
+  const w = await withTx(async (c) => {
+    const r = await c.query(
+      "UPDATE withdrawals SET status = 'rejected', processed_at = NOW() WHERE id = $1 AND status = 'pending' RETURNING *", [id]
+    );
+    if (!r.rows.length) throw new HttpError(409, 'Already processed.');
+    // Refund the coins (not counted as new earnings).
+    await c.query('UPDATE users SET coins = coins + $2, b_ads = b_ads + $2 WHERE telegram_id = $1', [r.rows[0].telegram_id, r.rows[0].coins]);
+    await c.query('INSERT INTO ledger (telegram_id, amount, kind, ref) VALUES ($1,$2,$3,$4)', [r.rows[0].telegram_id, r.rows[0].coins, 'refund', `withdrawal:${r.rows[0].id}`]);
+    return r.rows[0];
+  });
+  await sendTelegramMessage(w.telegram_id, `Your withdrawal #${w.id} was rejected and ${w.coins} coins were returned to your balance.`);
+  return w;
+}
+
+/* =========================================================
+   REFERRAL BONUS PROTECTION + CHANNEL LEFT
+   Invite -> Join -> Verify -> full day of ads (half) -> next full day (rest)
+   ========================================================= */
+
+async function checkReferralProgress(userId) {
+  const s = await getSettings();
+  const reward = Number(s.referral_reward) || 0;
+  if (reward <= 0) return;
+
+  const u = (await pool.query('SELECT * FROM users WHERE telegram_id = $1', [userId])).rows[0];
+  if (!u || !u.referred_by || u.ref_stage < 0 || u.ref_stage >= 2) return;
+  if (!u.username || !u.has_photo) return;               // fake-looking accounts never unlock the bonus
+
+  const f = (await pool.query('SELECT status FROM fraud_users WHERE telegram_id = $1', [userId])).rows[0];
+  if (!f || f.status !== 'verified') return;
+
+  const limit = Number(s.ad_daily_limit);
+  const d = await pool.query(
+    'SELECT COUNT(*)::int AS n FROM (SELECT day FROM ad_views WHERE telegram_id = $1 GROUP BY day HAVING COUNT(*) >= $2) x',
+    [userId, limit]
+  );
+  const stage = Math.min(2, d.rows[0].n);
+  if (stage <= u.ref_stage) return;
+
+  const half = Math.floor(reward / 2);
+  const amount = stage === 2 ? (u.ref_stage === 0 ? reward : reward - half) : half;
+  if (amount <= 0) return;
+
+  const paid = await withTx(async (c) => {
+    const upd = await c.query(
+      'UPDATE users SET ref_stage = $2, ref_paid_total = ref_paid_total + $3 WHERE telegram_id = $1 AND ref_stage = $4 RETURNING 1',
+      [userId, stage, amount, u.ref_stage]
+    );
+    if (!upd.rows.length) return false;
+    await credit(c, u.referred_by, amount, 'referral', `ref:${userId}`);
+    return true;
+  });
+
+  if (paid) {
+    await sendTelegramMessage(u.referred_by,
+      `${displayName(u)} completed ${stage === 1 ? 'a full day' : 'a second full day'} of ads. You earned +${amount} coins from this referral.`);
+  }
+}
+
+async function handleReferralLeft(userId) {
+  const info = await withTx(async (c) => {
+    const u = (await c.query('SELECT * FROM users WHERE telegram_id = $1 FOR UPDATE', [userId])).rows[0];
+    if (!u || !u.referred_by || u.ref_stage < 0) return null;
+
+    const paid = Number(u.ref_paid_total);
+    await c.query('UPDATE users SET ref_stage = -1, ref_paid_total = 0 WHERE telegram_id = $1', [userId]);
+
+    // Balance may go negative on purpose: the inviter "owes" the coins.
+    const r = await c.query(
+      `UPDATE users SET coins = coins - $2, total_earned = GREATEST(total_earned - $2, 0),
+              b_invite = GREATEST(b_invite - $2, 0), ref_left_count = ref_left_count + 1
+       WHERE telegram_id = $1 RETURNING ref_left_count`,
+      [u.referred_by, paid]
+    );
+    if (paid > 0) {
+      await c.query('INSERT INTO ledger (telegram_id, amount, kind, ref) VALUES ($1,$2,$3,$4)', [u.referred_by, -paid, 'referral_left', `ref:${userId}`]);
+    }
+    return { refId: u.referred_by, paid, name: displayName(u), count: r.rows[0].ref_left_count };
+  });
+  if (!info) return;
+
+  await sendTelegramMessage(info.refId,
+    info.paid > 0
+      ? `${info.name} (invited by you) left our channel. ${info.paid} coins were taken back from your balance.`
+      : `${info.name} (invited by you) left our channel before completing the requirements.`);
+
+  // Repeated "left" referrals => Fraudulent Referrer, banned and sent to admins for review.
+  const s = await getSettings();
+  const limit = Number(s.ref_fraud_threshold) || 0;
+  if (limit > 0 && info.count >= limit) {
+    await banUserById(info.refId, 'Fraudulent Referrer');
+    await notifyAdmins(
+      `Fraudulent Referrer flagged for review\nUser ID: ${info.refId}\nReferrals who left: ${info.count}`,
+      { reply_markup: { inline_keyboard: [[{ text: 'Unban', callback_data: `ub:${info.refId}` }]] } }
+    );
+  }
+}
+
+/* =========================================================
+   CHAT MEMBER UPDATES (required-channel leave + group task counting)
+   The bot must be an admin in the channels/groups for Telegram to send these.
+   ========================================================= */
+
+const isIn = (m) => !!m && (['member', 'administrator', 'creator'].includes(m.status) || (m.status === 'restricted' && m.is_member === true));
+
+function sameChat(stored, chat) {
+  const x = String(stored || '').toLowerCase().replace('@', '');
+  return x === String(chat.id) || (!!chat.username && x === String(chat.username).toLowerCase());
+}
+
+async function handleChatMember(cm) {
+  const chat = cm.chat, actor = cm.from, member = cm.new_chat_member?.user;
+  if (!chat || !member) return;
+
+  const wasIn = isIn(cm.old_chat_member), nowIn = isIn(cm.new_chat_member);
+  const joined = nowIn && !wasIn, left = !nowIn && wasIn;
+  if (!joined && !left) return;
+
+  // 1) Someone left one of the required channels.
+  if (left) {
+    const channels = await getRequiredChannels();
+    if (channels.some((c) => sameChat(c.chat_id, chat))) {
+      await handleReferralLeft(member.id);
+    }
+  }
+
+  // 2) Group tasks: "add N members to this group".
+  const tasks = (await pool.query("SELECT * FROM tasks WHERE kind = 'group' AND active = TRUE")).rows
+    .filter((t) => sameChat(t.chat_id, chat));
+  if (!tasks.length) return;
+
+  if (left) {
+    for (const t of tasks) {
+      const r = await pool.query(
+        'UPDATE group_adds SET active = FALSE WHERE task_id = $1 AND member_id = $2 AND active = TRUE RETURNING adder_id', [t.id, member.id]
+      );
+      if (r.rows.length) {
+        const n = (await pool.query('SELECT COUNT(*)::int AS c FROM group_adds WHERE task_id = $1 AND adder_id = $2 AND active = TRUE', [t.id, r.rows[0].adder_id])).rows[0].c;
+        await sendTelegramMessage(r.rows[0].adder_id, `A member you added left the group. Progress: ${n}/${t.target_members}`);
+      }
+    }
+    return;
+  }
+
+  // joined: only real, active users added by another (verified) user count.
+  if (!actor || actor.id === member.id || member.is_bot) return;
+  if (!member.username || /deleted account/i.test(member.first_name || '')) return;
+
+  const photo = await telegram('getUserProfilePhotos', { user_id: member.id, limit: 1 }).then((r) => r.result?.total_count || 0).catch(() => 0);
+  if (photo <= 0) return;
+
+  const adder = (await pool.query("SELECT 1 FROM fraud_users WHERE telegram_id = $1 AND status = 'verified'", [actor.id])).rows;
+  if (!adder.length) return;
+
+  const s = await getSettings();
+  const dailyMax = Number(s.group_add_daily_max) || 0;   // Telegram spam protection
+  if (dailyMax > 0) {
+    const today = (await pool.query(
+      `SELECT COUNT(*)::int AS c FROM group_adds WHERE adder_id = $1 AND to_char(created_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD') = $2`,
+      [actor.id, dayKey()]
+    )).rows[0].c;
+    if (today >= dailyMax) {
+      await sendTelegramMessage(actor.id, `Daily limit reached: only ${dailyMax} added members count per day. Continue tomorrow.`);
+      return;
+    }
+  }
+
+  for (const t of tasks) {
+    const ins = await pool.query(
+      `INSERT INTO group_adds (task_id, adder_id, member_id) VALUES ($1,$2,$3)
+       ON CONFLICT (task_id, member_id) DO UPDATE SET active = TRUE
+         WHERE group_adds.adder_id = EXCLUDED.adder_id AND group_adds.active = FALSE
+       RETURNING id`,
+      [t.id, actor.id, member.id]
+    );
+    if (ins.rows.length) {
+      const n = (await pool.query('SELECT COUNT(*)::int AS c FROM group_adds WHERE task_id = $1 AND adder_id = $2 AND active = TRUE', [t.id, actor.id])).rows[0].c;
+      await sendTelegramMessage(actor.id, `Member counted. Progress: ${n}/${t.target_members}${n >= t.target_members ? '\nTask complete! Open Adewa and tap Claim.' : ''}`);
+    }
+  }
+}
+
+/* =========================================================
+   WEEKLY LEADERBOARD + CRON (reminders, weekly prizes)
+   Vercel Cron calls GET /api/cron/tick with "Authorization: Bearer $CRON_SECRET".
+   ========================================================= */
+
+// Monday-based week range in Addis time. offset 0 = current week, -1 = last week.
+function weekRange(offset) {
+  const d = new Date(dayKey() + 'T00:00:00Z');
+  const back = (d.getUTCDay() + 6) % 7;
+  const start = new Date(d.getTime() - back * 86400000 + offset * 7 * 86400000);
+  const end = new Date(start.getTime() + 7 * 86400000);
+  const f = (x) => x.toISOString().slice(0, 10);
+  return { from: f(start), to: f(end) };
+}
+
+// Suspicious, banned or admin-blocked accounts are never counted.
+async function weeklyTop(from, to, limit) {
+  const r = await pool.query(
+    `SELECT u.telegram_id, u.first_name, u.username, SUM(l.amount) AS earned
+     FROM ledger l
+     JOIN users u ON u.telegram_id = l.telegram_id
+     JOIN fraud_users f ON f.telegram_id = l.telegram_id
+     WHERE l.amount > 0 AND l.kind NOT IN ('refund','leaderboard')
+       AND f.status = 'verified' AND u.lb_blocked = FALSE
+       AND l.created_at >= ($1::date)::timestamp AT TIME ZONE '${TZ}'
+       AND l.created_at <  ($2::date)::timestamp AT TIME ZONE '${TZ}'
+     GROUP BY u.telegram_id, u.first_name, u.username
+     ORDER BY earned DESC LIMIT $3`,
+    [from, to, limit]
+  );
+  return r.rows;
+}
+
+async function payWeeklyPrizes(s) {
+  const last = weekRange(-1);
+  const paidFor = (await pool.query("SELECT value FROM settings WHERE key = 'lb_paid_for'")).rows[0];
+  if (paidFor && paidFor.value === last.from) return 0;
+
+  const top = await weeklyTop(last.from, last.to, 3);
+  const prizes = [Number(s.lb_prize_1), Number(s.lb_prize_2), Number(s.lb_prize_3)];
+  let n = 0;
+  for (let i = 0; i < top.length; i++) {
+    if (!(prizes[i] > 0)) continue;
+    await credit(pool, top[i].telegram_id, prizes[i], 'leaderboard', `week:${last.from}`);
+    await sendTelegramMessage(top[i].telegram_id, `Weekly leaderboard: you finished #${i + 1}! +${prizes[i]} coins added.`);
+    n++;
+  }
+  await pool.query(
+    "INSERT INTO settings (key, value) VALUES ('lb_paid_for', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", [last.from]
+  );
+  return n;
+}
+
+async function sendReminders() {
+  const r = await pool.query(
+    `SELECT u.telegram_id FROM users u JOIN fraud_users f ON f.telegram_id = u.telegram_id
+     WHERE f.status = 'verified'
+       AND f.last_seen < NOW() - INTERVAL '20 hours' AND f.last_seen > NOW() - INTERVAL '7 days'
+       AND (u.last_reminded IS NULL OR u.last_reminded < NOW() - INTERVAL '20 hours')
+     LIMIT 400`
+  );
+  let sent = 0;
+  for (let i = 0; i < r.rows.length; i += 25) {
+    const batch = r.rows.slice(i, i + 25);
+    const res = await Promise.all(batch.map((x) =>
+      sendTelegramMessage(x.telegram_id, "Don't miss today's streak! Open Adewa and watch your ads to keep earning.", {
+        reply_markup: { inline_keyboard: [[{ text: 'Open Adewa', web_app: { url: MINI_APP_URL } }]] }
+      })
+    ));
+    sent += res.filter(Boolean).length;
+    await pool.query('UPDATE users SET last_reminded = NOW() WHERE telegram_id = ANY($1::bigint[])', [batch.map((x) => x.telegram_id)]);
+    if (i + 25 < r.rows.length) await sleep(1050);
+  }
+  return sent;
+}
+
+app.get('/api/cron/tick', route(async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  const given = String(req.headers.authorization || '').replace('Bearer ', '') || String(req.query.secret || '');
+  if (!secret || given !== secret) throw new HttpError(401, 'Unauthorized');
+  const s = await getSettings();
+  const prizes = await payWeeklyPrizes(s);
+  const reminders = await sendReminders();
+  res.json({ ok: true, prizes, reminders });
 }));
 
 /* =========================================================
