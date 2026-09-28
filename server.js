@@ -36,6 +36,11 @@ if (!ADMIN_IDS.length) console.warn('WARNING: ADMIN_IDS is not configured.');
 if (!BOT_USERNAME) console.warn('WARNING: BOT_USERNAME is not configured (invite links need it).');
 
 const DEFAULT_SETTINGS = {
+  app_name: 'Adewa',
+  ads_enabled: '1',
+  spin_enabled: '1',
+  wd_bep20_enabled: '1',
+  wd_ton_enabled: '1',
   ad_daily_limit: '10',
   ad_reward: '5',
   ad_min_seconds: '8',
@@ -978,9 +983,11 @@ app.get('/api/me', route(async (req, res) => {
     streak: row.streak,
     best_streak: row.best_streak,
     rates: { birr_per_coin: Number(s.birr_per_coin), usdt_per_coin: Number(s.usdt_per_coin) },
-    ads: { watched, limit: Number(s.ad_daily_limit), reward: Number(s.ad_reward) },
+    app_name: s.app_name,
+    ads: { watched, limit: Number(s.ad_daily_limit), reward: Number(s.ad_reward), enabled: s.ads_enabled === '1' },
     spin: {
-      available: !spun,
+      available: !spun && s.spin_enabled === '1',
+      enabled: s.spin_enabled === '1',
       rewards: String(s.spin_rewards).split(',').map(Number).filter((n) => n > 0)
     },
     referrals: {
@@ -989,7 +996,7 @@ app.get('/api/me', route(async (req, res) => {
       required: Number(s.referral_required),
       ad_days: Number(s.referral_ad_days)
     },
-    withdraw: { min_coins: Number(s.min_withdraw_coins) }
+    withdraw: { min_coins: Number(s.min_withdraw_coins), methods: ['bep20', 'ton'].filter((m) => s['wd_' + m + '_enabled'] === '1') }
   });
 }));
 
@@ -1000,6 +1007,7 @@ app.get('/api/me', route(async (req, res) => {
 app.post('/api/ads/start', route(async (req, res) => {
   const u = await requireUser(req);
   const s = await getSettings();
+  if (s.ads_enabled !== '1') throw new HttpError(503, 'Ads are currently turned off.');
 
   const watched = Number((await pool.query('SELECT COUNT(*) AS c FROM ad_views WHERE telegram_id = $1 AND day = $2', [u.id, dayKey()])).rows[0].c);
   if (watched >= Number(s.ad_daily_limit)) throw new HttpError(429, 'Daily ad limit reached. Come back tomorrow.');
@@ -1136,6 +1144,7 @@ app.post('/api/promo', route(async (req, res) => {
 app.post('/api/spin', route(async (req, res) => {
   const u = await requireUser(req);
   const s = await getSettings();
+  if (s.spin_enabled !== '1') throw new HttpError(503, 'Spin is currently turned off.');
   const rewards = String(s.spin_rewards).split(',').map(Number).filter((n) => n > 0);
   if (!rewards.length) throw new HttpError(503, 'Spin is not available.');
 
@@ -1200,7 +1209,7 @@ app.post('/api/withdraw', route(async (req, res) => {
   const address = String(req.body?.address || '').trim();
   const coins = Math.floor(Number(req.body?.coins));
 
-  if (!['bep20', 'ton'].includes(method)) throw new HttpError(400, 'Choose a payout method.');
+  if (!['bep20', 'ton'].includes(method) || s['wd_' + method + '_enabled'] !== '1') throw new HttpError(400, 'Choose an available payout method.');
   if (method === 'bep20' && !/^0x[a-fA-F0-9]{40}$/.test(address)) throw new HttpError(400, 'Invalid BEP20 address.');
   if (method === 'ton' && !/^([A-Za-z0-9_-]{48}|-?\d:[a-fA-F0-9]{64})$/.test(address)) throw new HttpError(400, 'Invalid TON address.');
 
