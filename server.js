@@ -1,94 +1,9 @@
 'use strict';
 
-/*
- * ---------------------------------------------------------
- * ONE-TIME DATABASE MIGRATION
- * Run this once against your Postgres database before
- * deploying this version (psql / any SQL client):
- *
- *   ALTER TABLE users
- *     ADD COLUMN IF NOT EXISTS vip_unlimited_until timestamptz,
- *     ADD COLUMN IF NOT EXISTS lang varchar(5) DEFAULT 'am',
- *     ADD COLUMN IF NOT EXISTS last_ip text,
- *     ADD COLUMN IF NOT EXISTS ads_coins numeric NOT NULL DEFAULT 0,
- *     ADD COLUMN IF NOT EXISTS invite_coins numeric NOT NULL DEFAULT 0,
- *     ADD COLUMN IF NOT EXISTS daily_ads numeric NOT NULL DEFAULT 0,
- *     ADD COLUMN IF NOT EXISTS daily_invite numeric NOT NULL DEFAULT 0,
- *     ADD COLUMN IF NOT EXISTS daily_task numeric NOT NULL DEFAULT 0,
- *     ADD COLUMN IF NOT EXISTS daily_earn_day date;
- *
- *   ALTER TABLE withdrawals
- *     ADD COLUMN IF NOT EXISTS holder_name text,
- *     ADD COLUMN IF NOT EXISTS from_ads numeric NOT NULL DEFAULT 0,
- *     ADD COLUMN IF NOT EXISTS from_invite numeric NOT NULL DEFAULT 0;
- *
- *   ALTER TABLE tasks
- *     ADD COLUMN IF NOT EXISTS sponsor text;
- *
- *   CREATE TABLE IF NOT EXISTS task_broadcasts(
- *     id bigserial PRIMARY KEY,
- *     task_id bigint NOT NULL,
- *     chat_id bigint NOT NULL,
- *     message_id bigint NOT NULL
- *   );
- *   CREATE INDEX IF NOT EXISTS task_broadcasts_task_idx
- *     ON task_broadcasts(task_id);
- *
- *   -- Per-channel referral payouts (NEW):
- *   ALTER TABLE users
- *     ADD COLUMN IF NOT EXISTS full_referral_bonus_paid boolean NOT NULL DEFAULT false;
- *
- *   CREATE TABLE IF NOT EXISTS referral_channels(
- *     invitee_id bigint NOT NULL,
- *     channel text NOT NULL,
- *     referrer_id bigint NOT NULL,
- *     was_member_before boolean NOT NULL DEFAULT false,
- *     currently_joined boolean NOT NULL DEFAULT false,
- *     joined_at timestamptz,
- *     paid boolean NOT NULL DEFAULT false,
- *     paid_at timestamptz,
- *     left_after_paid boolean NOT NULL DEFAULT false,
- *     clawed_back boolean NOT NULL DEFAULT false,
- *     PRIMARY KEY (invitee_id, channel)
- *   );
- *   CREATE INDEX IF NOT EXISTS referral_channels_referrer_idx
- *     ON referral_channels(referrer_id);
- *
- *   -- Verification / anti-fraud (NEW, ported from server 9).
- *   -- The fraud_users table is also created automatically on first
- *   -- use, so running this is optional:
- *   CREATE TABLE IF NOT EXISTS fraud_users(
- *     telegram_id bigint PRIMARY KEY,
- *     username text NOT NULL DEFAULT '',
- *     first_name text NOT NULL DEFAULT '',
- *     ip_hash text NOT NULL DEFAULT '',
- *     device_hash text NOT NULL DEFAULT '',
- *     vpn_detected boolean NOT NULL DEFAULT false,
- *     proxy_detected boolean NOT NULL DEFAULT false,
- *     risk_score integer NOT NULL DEFAULT 0,
- *     status text NOT NULL DEFAULT 'pending',
- *     ban_reason text NOT NULL DEFAULT '',
- *     verification_message_sent boolean NOT NULL DEFAULT false,
- *     ban_message_sent boolean NOT NULL DEFAULT false,
- *     admin_verified boolean NOT NULL DEFAULT false,
- *     first_seen timestamptz NOT NULL DEFAULT now(),
- *     last_seen timestamptz NOT NULL DEFAULT now(),
- *     request_count integer NOT NULL DEFAULT 0
- *   );
- *
- * Also set this new environment variable on Vercel:
- *   CRON_SECRET = <any random string you pick>
- * It protects the two cron endpoints added below
- * (/api/cron/streak-reminder and /api/cron/weekly-rewards).
- * Point a Vercel Cron Job (or any scheduler) at each URL
- * with header:  x-cron-key: <that same value>
- *
- * New: BOT_USERNAME = your bot's @username without the @
- * (used only inside the proof-channel message templates).
- * ---------------------------------------------------------
- */
-
-/* Premium (custom) emoji id used in task broadcasts */
+// Env vars: DATABASE_URL, BOT_TOKEN, ADMIN_IDS, PROOF_CHANNEL, MINI_APP_URL,
+// BOT_USERNAME, CRON_SECRET, TON_MNEMONIC, TON_WALLET_ADDRESS,
+// TONCENTER_API_KEY, BSC_PRIVATE_KEY, BSC_RPC, ADD_GROUP_ID, ADD_GROUP_LINK
+// Packages: express cors pg ethers @ton/ton @ton/crypto @ton/core
 const NOTI_EMOJI = '5456140674028019486';
 
 const escHtml = (t) =>
@@ -99,17 +14,8 @@ const cors = require('cors');
 const crypto = require('crypto');
 const { Pool } = require('pg');
 
-/* ---------- config (Vercel environment variables) ---------- */
-
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
 
-/*
- * ADMIN_ID = old/single admin support
- * ADMIN_IDS = multiple admins, comma separated
- *
- * Example:
- * ADMIN_IDS=123456789,987654321,555555555
- */
 const ADMIN_IDS = String(
   process.env.ADMIN_IDS || process.env.ADMIN_ID || ''
 )
@@ -135,16 +41,24 @@ const MINI_APP_URL =
 const BOT_USERNAME =
   process.env.BOT_USERNAME || '';
 
-/*
- * ---------- AI FAQ / admin assistant (NEW) ----------
- * Answers ordinary user questions automatically using
- * Claude, so a human admin doesn't have to reply to every
- * "how do I withdraw" / "when do I get paid" message.
- *
- * Set these two on Vercel:
- *   ANTHROPIC_API_KEY = your Anthropic API key
- *   CLAUDE_MODEL      = optional, defaults to a fast/cheap model
- */
+const TON_WALLET_ADDRESS =
+  process.env.TON_WALLET_ADDRESS ||
+  'UQBnqsss4HOg3WLfxSaL1LsUOebC9fxh0xZuQNcEnPR3Y5Wj';
+
+const TON_MNEMONIC = process.env.TON_MNEMONIC || '';
+const TONCENTER_API_KEY = process.env.TONCENTER_API_KEY || '';
+
+const TONCENTER_ENDPOINT =
+  process.env.TONCENTER_ENDPOINT ||
+  'https://toncenter.com/api/v2/jsonRPC';
+
+const BSC_PRIVATE_KEY = process.env.BSC_PRIVATE_KEY || '';
+const BSC_RPC = process.env.BSC_RPC || 'https://bsc-dataseed.binance.org';
+
+const USDT_BSC = '0x55d398326f99059fF775485246999027B3197955';
+
+const CRYPTO_METHODS = ['bep20', 'ton'];
+
 const ANTHROPIC_API_KEY =
   process.env.ANTHROPIC_API_KEY || '';
 
@@ -152,13 +66,6 @@ const CLAUDE_MODEL =
   process.env.CLAUDE_MODEL ||
   'claude-haiku-4-5-20251001';
 
-/*
- * Fallback knowledge used until an admin sets custom
- * knowledge with /setfaq <text>, or via
- * POST /api/admin/setting {key:"faq_knowledge", value:"..."}.
- * Edit this any time — it only affects the AI's answers,
- * nothing else in the app.
- */
 const DEFAULT_FAQ_KNOWLEDGE = `
 App name: Adewa (formerly FulusApp) — a Telegram Mini App where users earn coins.
 Sections: Home, Tasks, Invite, Withdraw.
@@ -171,23 +78,24 @@ There are daily limits on ads/earnings, and VIP users (based on invite count) ge
 If you don't know a specific number (exact fee %, exact minimum withdrawal, exact reward), say a human admin will confirm it — never guess exact figures.
 `;
 
-/*
- * The only 3 withdraw methods allowed, and the
- * validation rule for the phone/account number
- * typed for each one.
- */
 const WITHDRAW_METHODS = {
   telebirr: /^09\d{8}$/,
   mpesa: /^07\d{8}$/,
-  cbe: /^(1000\d{9}|10000\d{8})$/
+  cbe: /^(1000\d{9}|10000\d{8})$/,
+
+  /* crypto (auto payout) - OFF unless listed in WITHDRAW_METHODS_ENABLED */
+  bep20: /^0x[a-fA-F0-9]{40}$/,
+  ton: /^([A-Za-z0-9_-]{48}|-?\d:[a-fA-F0-9]{64})$/
 };
 
-/*
- * Default required channels.
- *
- * IMPORTANT:
- * The bot must be able to use getChatMember() for these channels.
- */
+/* Env WITHDRAW_METHODS_ENABLED, e.g. "telebirr,cbe" (default) or "telebirr,cbe,mpesa,bep20,ton" */
+const ENABLED_METHODS = String(
+  process.env.WITHDRAW_METHODS_ENABLED || 'telebirr,cbe'
+)
+  .split(',')
+  .map((x) => x.trim().toLowerCase())
+  .filter(Boolean);
+
 const DEFAULT_GATE_CHANNELS = [
   '@andbndj',
   '@proof_chnallel',
@@ -233,8 +141,6 @@ const fail = (res, code, error, extra = {}) =>
 const isAdmin = (id) =>
   ADMIN_IDS.includes(String(id));
 
-/* ---------- telegram helpers ---------- */
-
 async function tg(method, body) {
   try {
     const r = await fetch(
@@ -256,8 +162,6 @@ async function tg(method, body) {
     };
   }
 }
-
-/* ---------- AI FAQ helper (NEW) ---------- */
 
 async function askFAQAI(question, knowledge) {
   if (!ANTHROPIC_API_KEY) return null;
@@ -306,8 +210,6 @@ async function askFAQAI(question, knowledge) {
   }
 }
 
-/* ---------- Telegram Mini App auth ---------- */
-
 function verifyInitData(initData) {
   if (!initData || !BOT_TOKEN) return null;
 
@@ -353,8 +255,6 @@ function verifyInitData(initData) {
   }
 }
 
-/* ---------- settings ---------- */
-
 let sCache = {
   t: 0,
   v: {}
@@ -375,10 +275,6 @@ async function settings() {
     v[r.key] = r.value;
   });
 
-  /*
-   * If gate_channels is missing or empty,
-   * automatically use the 5 default channels.
-   */
   if (
     !Array.isArray(v.gate_channels) ||
     !v.gate_channels.length
@@ -386,18 +282,6 @@ async function settings() {
     v.gate_channels = DEFAULT_GATE_CHANNELS;
   }
 
-  /*
-   * FIX: if the admin panel has never saved these yet,
-   * the settings table simply has no row for them, so
-   * S.free_table / S.paid_table / S.spin_cost were
-   * `undefined`. That produced an empty prize list in
-   * /api/me (the wheel showed "undefined" segments) and
-   * crashed pick() with a "Cannot read properties of
-   * undefined (reading 'reduce')" 500 whenever a user
-   * actually spun. These defaults keep the spin screen
-   * working immediately, and the admin panel still
-   * overrides them the moment real values are saved.
-   */
   if (
     !Array.isArray(v.free_table) ||
     !v.free_table.length
@@ -437,14 +321,9 @@ async function settings() {
     v.coin_per_etb === null ||
     v.coin_per_etb === ''
   ) {
-    /* 1 ETB = 100 coins by default; admin can change this any time. */
     v.coin_per_etb = 100;
   }
 
-  /*
-   * Admin toggles: which earning source can currently be
-   * withdrawn. Default both on (normal withdraw behaviour).
-   */
   if (v.ads_payment_enabled === undefined) {
     v.ads_payment_enabled = true;
   }
@@ -469,21 +348,10 @@ async function settings() {
     v.free_spins = 5;
   }
 
-  /*
-   * AI FAQ / admin assistant (NEW): on by default,
-   * admin can turn it off with /faqoff or the setting.
-   */
   if (v.faq_bot_enabled === undefined) {
     v.faq_bot_enabled = true;
   }
 
-  /*
-   * Per-channel referral payouts (NEW): how much each
-   * gate channel pays a referrer when their invitee
-   * newly joins it. Any channel not listed here falls
-   * back to `referral_reward`. Example admin setting:
-   * {"@andbndj": 20, "@proof_chnallel": 10}
-   */
   if (
     !v.channel_rewards ||
     typeof v.channel_rewards !== 'object' ||
@@ -497,7 +365,6 @@ async function settings() {
     v.referral_min_hold_hours === null ||
     v.referral_min_hold_hours === ''
   ) {
-    /* invitee must stay in the channel this long before it pays out */
     v.referral_min_hold_hours = 24;
   }
 
@@ -506,7 +373,6 @@ async function settings() {
     v.referral_clawback_hours === null ||
     v.referral_clawback_hours === ''
   ) {
-    /* if the invitee leaves within this many hours AFTER payout, take the coins back */
     v.referral_clawback_hours = 48;
   }
 
@@ -515,12 +381,10 @@ async function settings() {
     v.referral_daily_cap === null ||
     v.referral_daily_cap === ''
   ) {
-    /* 0 = no cap; otherwise max paid channel-joins per referrer per day */
     v.referral_daily_cap = 0;
   }
 
   if (v.referral_require_activity === undefined) {
-    /* invitee must complete at least one ad or check-in before payout */
     v.referral_require_activity = true;
   }
 
@@ -529,9 +393,39 @@ async function settings() {
     v.referral_full_bonus === null ||
     v.referral_full_bonus === ''
   ) {
-    /* extra bonus once an invitee has been paid for every required channel */
     v.referral_full_bonus = 0;
   }
+
+  if (
+    v.etb_per_usd === undefined ||
+    v.etb_per_usd === null ||
+    v.etb_per_usd === ''
+  ) {
+    v.etb_per_usd = 150;
+  }
+
+  if (
+    v.ton_usd_price === undefined ||
+    v.ton_usd_price === null ||
+    v.ton_usd_price === ''
+  ) {
+    v.ton_usd_price = 0;
+  }
+
+  if (v.withdraw_adds_required === undefined || v.withdraw_adds_required === null || v.withdraw_adds_required === '') {
+    v.withdraw_adds_required = 0;
+  }
+
+  if (
+    !v.channel_meta ||
+    typeof v.channel_meta !== 'object' ||
+    Array.isArray(v.channel_meta)
+  ) {
+    v.channel_meta = {};
+  }
+
+  if (!v.add_group_id) v.add_group_id = process.env.ADD_GROUP_ID || '';
+  if (!v.add_group_link) v.add_group_link = process.env.ADD_GROUP_LINK || '';
 
   sCache = {
     t: Date.now(),
@@ -565,27 +459,30 @@ const SETTING_KEYS = [
   'gate_channels',
   'gate_cache_min',
 
-  /* --- VIP / weekly rewards / anti-cheat --- */
   'vip_invites_unlimited',
   'weekly_top_inviter_min',
   'weekly_top_inviter_bonus_etb',
   'anticheat_ip_check',
 
-  /* --- AI FAQ / admin assistant (NEW) --- */
   'faq_knowledge',
   'faq_bot_enabled',
 
-  /* --- per-channel referral payouts (NEW) --- */
   'channel_rewards',
   'referral_min_hold_hours',
   'referral_clawback_hours',
   'referral_daily_cap',
   'referral_require_activity',
   'referral_full_bonus',
-  'support_bot_username'
-];
+  'support_bot_username',
 
-/* ---------- users ---------- */
+  'etb_per_usd',
+  'ton_usd_price',
+
+  'withdraw_adds_required',
+  'add_group_id',
+  'add_group_link',
+  'channel_meta'
+];
 
 async function ensureUser(tu, refId) {
   const ins = await q(
@@ -618,15 +515,6 @@ async function ensureUser(tu, refId) {
       );
 
       if (assigned.rowCount) {
-        /*
-         * Per-channel referral payouts (NEW): snapshot,
-         * for each gate channel, whether this brand-new
-         * user was ALREADY a member the moment they
-         * started via this referral link. Channels where
-         * was_member_before=true never pay the referrer —
-         * this is what stops "invite someone who already
-         * joined every channel" from earning anything.
-         */
         await captureReferralBaseline(tu.id, refId);
       }
     }
@@ -645,15 +533,6 @@ async function ensureUser(tu, refId) {
   }
 }
 
-/* ---------- per-channel referral payouts (NEW) ---------- */
-
-/*
- * Called once, the moment a brand-new user starts the bot
- * through someone's referral link. Records, per gate
- * channel, whether they were already a member at that
- * instant — the baseline every later payout decision
- * checks against.
- */
 async function captureReferralBaseline(inviteeId, referrerId) {
   const S = await settings();
 
@@ -694,16 +573,6 @@ async function captureReferralBaseline(inviteeId, referrerId) {
   }
 }
 
-/*
- * Called every time a user's real gate-channel membership
- * is freshly checked (see checkGate below). Reacts to
- * join/leave transitions for channels that were NOT
- * already joined at referral time, pays the referrer once
- * the invitee has stayed the configured minimum hold
- * period, claws payment back if the invitee leaves soon
- * after being paid, and pays a one-time full-completion
- * bonus once every required channel has paid out.
- */
 async function syncReferralChannels(inviteeId, channels) {
   const rows = (
     await q(
@@ -734,12 +603,9 @@ async function syncReferralChannels(inviteeId, channels) {
   for (const c of channels) {
     const row = byChannel[c.chat];
 
-    /* no baseline row (channel added after this user joined), or
-       they were already a member before being invited: never pays */
     if (!row || row.was_member_before) continue;
 
     if (c.joined && !row.currently_joined) {
-      /* join event (first join, or a rejoin after leaving) */
       await q(
         `UPDATE referral_channels
          SET currently_joined=true, joined_at=now()
@@ -749,7 +615,6 @@ async function syncReferralChannels(inviteeId, channels) {
       row.currently_joined = true;
       row.joined_at = new Date();
     } else if (!c.joined && row.currently_joined) {
-      /* leave event */
       if (row.paid && !row.clawed_back) {
         const withinWindow =
           row.paid_at &&
@@ -793,13 +658,6 @@ async function syncReferralChannels(inviteeId, channels) {
           );
         }
       } else {
-        /*
-         * Not paid yet: reset the join clock. If they
-         * left-and-rejoin to game the hold period, they
-         * have to wait the full period again from the
-         * new join, and this channel still pays at most
-         * once (the row is never duplicated).
-         */
         await q(
           `UPDATE referral_channels
            SET currently_joined=false, joined_at=NULL
@@ -811,134 +669,153 @@ async function syncReferralChannels(inviteeId, channels) {
       row.currently_joined = false;
     }
 
-    /* payout check */
-    if (!row.paid && row.currently_joined && row.joined_at) {
-      const heldMs = Date.now() - new Date(row.joined_at).getTime();
-
-      if (heldMs < minHoldMs) continue;
-
-      if (S.referral_require_activity) {
-        const act = (
-          await q(
-            `SELECT
-              EXISTS(SELECT 1 FROM ad_views WHERE user_id=$1 AND completed)
-              OR EXISTS(SELECT 1 FROM users WHERE id=$1 AND last_checkin IS NOT NULL)
-              AS did`,
-            [inviteeId]
-          )
-        ).rows[0].did;
-
-        if (!act) continue;
-      }
-
-      const cap = Number(S.referral_daily_cap || 0);
-
-      if (cap > 0) {
-        const cnt = (
-          await q(
-            `SELECT COUNT(*)::int AS c
-             FROM referral_channels
-             WHERE referrer_id=$1 AND paid AND paid_at::date=CURRENT_DATE`,
-            [row.referrer_id]
-          )
-        ).rows[0].c;
-
-        if (cnt >= cap) continue;
-      }
-
-      const referrer = (
-        await q(`SELECT flagged FROM users WHERE id=$1`, [row.referrer_id])
-      ).rows[0];
-
-      if (!referrer || referrer.flagged) continue;
-
-      const amt = rewardFor(c.chat);
-
-      await q(
-        `UPDATE users
-         SET coins=coins+$2, invite_coins=invite_coins+$2
-         WHERE id=$1`,
-        [row.referrer_id, amt]
-      );
-
-      await q(
-        `UPDATE referral_channels
-         SET paid=true, paid_at=now()
-         WHERE invitee_id=$1 AND channel=$2`,
-        [inviteeId, c.chat]
-      );
-
-      await q(
-        `UPDATE users SET referral_paid=true WHERE id=$1 AND NOT referral_paid`,
-        [inviteeId]
-      );
-
-      row.paid = true;
-
-      const invitee = (
-        await q(
-          `SELECT first_name, username FROM users WHERE id=$1`,
-          [inviteeId]
-        )
-      ).rows[0] || {};
-
-      const name = invitee.username
-        ? '@' + invitee.username
-        : invitee.first_name || 'Someone';
-
-      const remaining = (
-        await q(
-          `SELECT COUNT(*)::int AS c
-           FROM referral_channels
-           WHERE invitee_id=$1 AND NOT was_member_before AND NOT paid`,
-          [inviteeId]
-        )
-      ).rows[0].c;
-
-      await tg('sendMessage', {
-        chat_id: row.referrer_id,
-        text:
-          `🎉 ${name} joined ${c.chat} — you earned ${amt} coins!` +
-          (remaining > 0
-            ? `\n${remaining} more channel(s) for the full bonus.`
-            : '')
-      }).catch(() => {});
-
-      if (remaining === 0) {
-        const bonus = Number(S.referral_full_bonus || 0);
-
-        const already = (
-          await q(
-            `SELECT full_referral_bonus_paid FROM users WHERE id=$1`,
-            [inviteeId]
-          )
-        ).rows[0];
-
-        if (bonus > 0 && already && !already.full_referral_bonus_paid) {
-          await q(
-            `UPDATE users
-             SET coins=coins+$2, invite_coins=invite_coins+$2
-             WHERE id=$1`,
-            [row.referrer_id, bonus]
-          );
-
-          await q(
-            `UPDATE users SET full_referral_bonus_paid=true WHERE id=$1`,
-            [inviteeId]
-          );
-
-          await tg('sendMessage', {
-            chat_id: row.referrer_id,
-            text:
-              `🏆 ${name} joined every required channel! Full bonus: +${bonus} coins.`
-          }).catch(() => {});
-        }
-      }
-    }
   }
 }
 
-/* ---------- authentication ---------- */
+/* =========================================================
+   REQUIRED CHANNELS: title / link / reward + full referral pay
+========================================================= */
+
+function gateChans(S) {
+  const c = Array.isArray(S.gate_channels) && S.gate_channels.length
+    ? S.gate_channels
+    : DEFAULT_GATE_CHANNELS;
+
+  return c.length ? c : DEFAULT_GATE_CHANNELS;
+}
+
+function channelInfo(S, chat) {
+  const meta = (S.channel_meta && S.channel_meta[chat]) || {};
+  const rw = (S.channel_rewards || {})[chat];
+
+  return {
+    chat,
+    title: meta.title || String(chat),
+    url: meta.link || chatUrl(chat),
+    reward: Number(rw != null && rw !== '' ? rw : S.referral_reward || 0)
+  };
+}
+
+async function isChannelMember(chat, userId) {
+  const r = await tg('getChatMember', { chat_id: chat, user_id: userId });
+
+  if (!r.ok) return false;
+
+  const st = r.result.status;
+
+  return st === 'restricted'
+    ? !!r.result.is_member
+    : ['member', 'administrator', 'creator'].includes(st);
+}
+
+/*
+ * The inviter is paid ONCE, when the invited person
+ *   1) joined ALL required channels, and
+ *   2) passed the multi-account / VPN check (fraud status "verified").
+ * Amount = sum of every channel's reward (4 channels x 250 = 1000).
+ */
+async function tryPayFullReferral(inviteeId, knownChannels) {
+  const u = (
+    await q(
+      `SELECT id, first_name, username, referred_by, referral_paid, flagged, banned
+       FROM users WHERE id=$1`,
+      [inviteeId]
+    )
+  ).rows[0];
+
+  if (!u || !u.referred_by || u.referral_paid || u.flagged || u.banned) return;
+  if (String(u.referred_by) === String(u.id)) return;
+
+  const fz = (
+    await q('SELECT status FROM fraud_users WHERE telegram_id=$1', [inviteeId])
+  ).rows[0];
+
+  if (!fz || fz.status !== 'verified') return;
+
+  const S = await settings();
+  const chans = gateChans(S);
+
+  let allJoined;
+
+  if (knownChannels && knownChannels.length) {
+    allJoined = chans.every((c) =>
+      knownChannels.some((k) => k.chat === c && k.joined)
+    );
+  } else {
+    const rs = await Promise.all(chans.map((c) => isChannelMember(c, inviteeId)));
+    allJoined = rs.every(Boolean);
+  }
+
+  if (!allJoined) return;
+
+  const ref = (
+    await q('SELECT id, flagged, banned FROM users WHERE id=$1', [u.referred_by])
+  ).rows[0];
+
+  if (!ref || ref.flagged || ref.banned) return;
+
+  let total = chans.reduce((a, c) => a + channelInfo(S, c).reward, 0);
+
+  const bonus = Number(S.referral_full_bonus || 0);
+  if (bonus > 0) total += bonus;
+
+  /* atomic: only one request can win, so it can never pay twice */
+  const claim = await q(
+    `UPDATE users
+     SET referral_paid=true, full_referral_bonus_paid=true
+     WHERE id=$1 AND referral_paid=false
+     RETURNING id`,
+    [inviteeId]
+  );
+
+  if (!claim.rowCount) return;
+
+  if (total > 0) {
+    await q(
+      `UPDATE users
+       SET coins=coins+$2,
+           invite_coins=invite_coins+$2,
+           daily_ads =
+             CASE WHEN daily_earn_day=CURRENT_DATE THEN daily_ads ELSE 0 END,
+           daily_task =
+             CASE WHEN daily_earn_day=CURRENT_DATE THEN daily_task ELSE 0 END,
+           daily_invite =
+             CASE WHEN daily_earn_day=CURRENT_DATE THEN daily_invite+$2 ELSE $2 END,
+           daily_earn_day=CURRENT_DATE
+       WHERE id=$1`,
+      [u.referred_by, total]
+    );
+  }
+
+  await q(
+    `UPDATE referral_channels
+     SET paid=true, paid_at=now(), currently_joined=true
+     WHERE invitee_id=$1`,
+    [inviteeId]
+  );
+
+  const name = u.username ? '@' + u.username : u.first_name || 'Someone';
+
+  await tg('sendMessage', {
+    chat_id: u.referred_by,
+    text:
+      `🎉 ${name} joined all ${chans.length} required channel(s).\\n` +
+      `You earned ${total} coins from this invite.\\n\\n` +
+      `🎉 ${name} ሁሉንም ${chans.length} ቻናል ተቀላቅለዋል።\\n` +
+      `በዚህ ኢንቫይት ${total} ኮይን አግኝተዋል።`
+  }).catch(() => {});
+}
+
+async function saveSettingRow(key, value) {
+  await q(
+    `INSERT INTO settings(key, value) VALUES($1,$2)
+     ON CONFLICT(key) DO UPDATE SET value=$2`,
+    [key, JSON.stringify(value)]
+  );
+
+  sCache.t = 0;
+}
+
 
 const auth = ah(async (req, res, next) => {
   const d = verifyInitData(
@@ -988,8 +865,9 @@ const auth = ah(async (req, res, next) => {
     });
   }
 
-  /* must pass POST /api/auth (verification) before using the app */
-  if (!fz || fz.status !== 'verified') {
+  const gateOnly = String(req.originalUrl || '').split('?')[0] === '/api/gate';
+
+  if (!gateOnly && (!fz || fz.status !== 'verified')) {
     return fail(res, 403, 'not_verified');
   }
 
@@ -1026,15 +904,6 @@ const auth = ah(async (req, res, next) => {
     u.device_hash = dev;
   }
 
-  /*
-   * Best-effort anti-cheat: track the caller's IP
-   * (Vercel puts the real client IP in x-forwarded-for)
-   * and flag accounts that pile up on the same IP.
-   * This is a simple heuristic, not real VPN detection —
-   * true VPN/proxy detection needs a paid IP-reputation
-   * API (e.g. ipqualityscore.com); wire one in here if
-   * you get a key, using the same flagging pattern.
-   */
   const ip = String(
     req.headers['x-forwarded-for'] || ''
   )
@@ -1079,8 +948,6 @@ const auth = ah(async (req, res, next) => {
 
   next();
 });
-
-/* ---------- Verification / anti-fraud (VPN + multi-account) ---------- */
 
 let fraudReady = null;
 
@@ -1281,11 +1148,6 @@ async function unbanUserById(telegramId) {
   return r.rows[0] || null;
 }
 
-/*
- * POST /api/auth  — the anti-fraud gate. The mini app calls this
- * first on every open. Order: already banned -> multi-account ->
- * VPN/proxy -> verified.
- */
 app.post(
   '/api/auth',
   ah(async (req, res) => {
@@ -1312,7 +1174,6 @@ app.post(
     const ipHash = sha256(ip);
     const deviceHash = sha256(deviceId);
 
-    /* make sure the user row (and referral link) exists */
     const m = /^ref_(\d+)$/.exec(d.start || '');
     await ensureUser(user, m ? m[1] : null);
 
@@ -1320,7 +1181,6 @@ app.post(
       await q('SELECT * FROM fraud_users WHERE telegram_id=$1 LIMIT 1', [telegramId])
     ).rows[0];
 
-    /* already banned */
     if (existing && existing.status === 'banned') {
       await sendBanMessage(telegramId, getBanType(existing.ban_reason));
 
@@ -1333,10 +1193,8 @@ app.post(
       });
     }
 
-    /* accounts an admin unbanned are trusted going forward */
     const trusted = !!existing && existing.admin_verified === true;
 
-    /* 1) multi-account check first */
     const multi = trusted
       ? { detected: false }
       : await detectMultiAccount(telegramId, ipHash, deviceHash);
@@ -1354,7 +1212,6 @@ app.post(
       });
     }
 
-    /* 2) VPN / proxy check */
     const net = trusted ? { detected: false } : await detectVPNProxy(ip);
 
     if (net.detected) {
@@ -1381,7 +1238,6 @@ app.post(
       });
     }
 
-    /* 3) normal user -> verified */
     await q(
       `INSERT INTO fraud_users
          (telegram_id, username, first_name, ip_hash, device_hash, vpn_detected, proxy_detected,
@@ -1412,6 +1268,10 @@ app.post(
       }
     }
 
+    await tryPayFullReferral(telegramId).catch((e) =>
+      console.error('tryPayFullReferral', e)
+    );
+
     return res.json({
       ok: true,
       status: 'verified',
@@ -1420,8 +1280,6 @@ app.post(
     });
   })
 );
-
-/* ---------- Gate ---------- */
 
 const forceThrottle = new Map();
 
@@ -1530,16 +1388,13 @@ async function checkGate(user, force) {
     ]
   );
 
-  /*
-   * Per-channel referral payouts (NEW): every time we
-   * actually re-check membership (not served from cache),
-   * feed the fresh per-channel results to the payout/
-   * clawback logic. Failures here must never break the
-   * gate check itself.
-   */
-  syncReferralChannels(user.id, channels).catch((e) =>
-    console.error('syncReferralChannels', e)
-  );
+  try {
+    await syncReferralChannels(user.id, channels);
+
+    if (ok) await tryPayFullReferral(user.id, channels);
+  } catch (e) {
+    console.error('syncReferralChannels', e);
+  }
 
   return {
     ok,
@@ -1566,8 +1421,6 @@ const needGate = ah(
   }
 );
 
-/* ---------- admin ---------- */
-
 const adminOnly = (
   req,
   res,
@@ -1577,18 +1430,7 @@ const adminOnly = (
     ? next()
     : fail(res, 403, 'admin');
 
-/* ---------- referrals ---------- */
-
 async function processReferrals(uid) {
-  /*
-   * SUPERSEDED (NEW): referral payouts are now per-channel,
-   * handled by syncReferralChannels() as each channel's
-   * membership is (re)checked in checkGate(). This function
-   * is kept only so its call site in /api/me doesn't need
-   * removing, and now does nothing — the old flat "2 days
-   * of ads after joining every channel" payout is disabled
-   * to avoid paying twice for the same referral.
-   */
   return;
 
   const S = await settings();
@@ -1640,8 +1482,6 @@ async function processReferrals(uid) {
   }
 }
 
-/* ---------- VIP (unlimited ads) ---------- */
-
 async function vipStatus(user) {
   const S = await settings();
 
@@ -1672,14 +1512,7 @@ async function vipStatus(user) {
   return refs >= need;
 }
 
-/* ---------- utilities ---------- */
-
 function pick(table) {
-  /*
-   * FIX: defend against a missing/empty prize table so a
-   * spin never crashes with a 500 (it now just pays 0
-   * instead of throwing).
-   */
   if (!Array.isArray(table) || !table.length) {
     return 0;
   }
@@ -1730,11 +1563,6 @@ async function finishTask(id) {
   }
 }
 
-/*
- * Deletes every broadcast message that was sent
- * for this task (once its slots are full) and
- * clears the tracking rows.
- */
 async function deleteTaskBroadcast(taskId) {
   const { rows } = await q(
     `SELECT chat_id, message_id
@@ -1761,10 +1589,6 @@ const chatUrl = (c) =>
   'https://t.me/' +
   String(c).replace(/^@/, '');
 
-/*
- * Builds the exact proof-channel caption for a paid
- * withdrawal, in the format for each of the 3 methods.
- */
 function buildProofCaption(w, feePercent) {
   const fee =
     Math.round(
@@ -1811,7 +1635,6 @@ function buildProofCaption(w, feePercent) {
     );
   }
 
-  /* cbe */
   return (
     `💸 New Withdrawal approve \n` +
     `----------------\n` +
@@ -1824,8 +1647,6 @@ function buildProofCaption(w, feePercent) {
     footer
   );
 }
-
-/* ---------- basics ---------- */
 
 app.get(
   '/health',
@@ -1841,8 +1662,6 @@ app.get(
   })
 );
 
-/* ---------- gate endpoint ---------- */
-
 app.get(
   '/api/gate',
   auth,
@@ -1854,18 +1673,21 @@ app.get(
 
     res.json({
       ok: g.ok,
-      channels: g.channels.map(
-        (c) => ({
-          chat: c.chat,
-          joined: c.joined,
-          url: chatUrl(c.chat)
+      channels: await Promise.all(
+        g.channels.map(async (c) => {
+          const info = channelInfo(await settings(), c.chat);
+
+          return {
+            chat: c.chat,
+            joined: c.joined,
+            title: info.title,
+            url: info.url
+          };
         })
       )
     });
   })
 );
-
-/* ---------- me ---------- */
 
 app.get(
   '/api/me',
@@ -2073,6 +1895,15 @@ app.get(
           refs_have:
             refs,
 
+          adds_required:
+            Number(S.withdraw_adds_required || 0),
+
+          adds_have:
+            await countGroupAdds(u.id, S),
+
+          group_link:
+            S.add_group_link || '',
+
           next_at:
             nextAt &&
             nextAt > new Date()
@@ -2082,9 +1913,13 @@ app.get(
           interval_h:
             S.withdraw_interval_hours,
 
-          methods: Object.keys(
-            WITHDRAW_METHODS
-          ),
+          methods: availableMethods(),
+
+          etb_per_usd:
+            Number(S.etb_per_usd || 0),
+
+          ton_usd:
+            tonUsdCache.v || Number(S.ton_usd_price || 0),
 
           ads_enabled:
             S.ads_payment_enabled !== false,
@@ -2122,13 +1957,6 @@ app.get(
   })
 );
 
-/* ---------- checkin calendar ----------
- * The frontend calls this every load; it was missing
- * before (404s flooding the logs). We don't store a
- * full per-day checkin log, so this approximates the
- * last `streak` consecutive days ending at last_checkin.
- */
-
 app.get(
   '/api/checkin-calendar',
   auth,
@@ -2150,8 +1978,6 @@ app.get(
   })
 );
 
-/* ---------- language ---------- */
-
 app.post(
   '/api/lang',
   auth,
@@ -2169,8 +1995,6 @@ app.post(
   })
 );
 
-/* ---------- bot name ---------- */
-
 let _bot = '';
 
 async function botName() {
@@ -2187,8 +2011,6 @@ async function botName() {
 
   return _bot;
 }
-
-/* ---------- streak ---------- */
 
 app.post(
   '/api/checkin',
@@ -2337,8 +2159,6 @@ app.post(
     });
   })
 );
-
-/* ---------- ads ---------- */
 
 app.post(
   '/api/ad/start',
@@ -2521,8 +2341,6 @@ app.post(
   })
 );
 
-/* ---------- spin ---------- */
-
 app.post(
   '/api/spin',
   auth,
@@ -2673,8 +2491,6 @@ app.get(
     });
   })
 );
-
-/* ---------- tasks ---------- */
 
 app.get(
   '/api/tasks',
@@ -2978,8 +2794,6 @@ app.post(
   })
 );
 
-/* ---------- promo ---------- */
-
 app.post(
   '/api/promo',
   auth,
@@ -3081,8 +2895,6 @@ app.post(
   })
 );
 
-/* ---------- leaderboard ---------- */
-
 app.get(
   '/api/leaderboard',
   auth,
@@ -3169,18 +2981,22 @@ app.get(
   })
 );
 
-/* ---------- withdrawals ---------- */
-
 app.get(
   '/api/withdrawals',
   auth,
   ah(async (req, res) => {
+    await ensureCryptoCols();
+
     const { rows } = await q(
       `SELECT
         id,
         etb,
         method,
+        account,
         status,
+        tx_hash,
+        paid_amount,
+        paid_asset,
         created_at
        FROM withdrawals
        WHERE user_id=$1
@@ -3251,7 +3067,7 @@ app.post(
       b.account || ''
     )
       .trim()
-      .slice(0, 32);
+      .slice(0, 80);
 
     const holderName = String(
       b.holder_name || b.owner_name || ''
@@ -3261,7 +3077,8 @@ app.post(
 
     if (
       !(etb > 0) ||
-      !WITHDRAW_METHODS[method]
+      !WITHDRAW_METHODS[method] ||
+      !availableMethods().includes(method)
     ) {
       return fail(
         res,
@@ -3270,19 +3087,24 @@ app.post(
       );
     }
 
+    const isCrypto = CRYPTO_METHODS.includes(method);
+
     if (
-      !WITHDRAW_METHODS[method].test(
-        account
-      )
+      isCrypto &&
+      !availableMethods().includes(method)
     ) {
+      return fail(res, 423, 'crypto_off');
+    }
+
+    if (!WITHDRAW_METHODS[method].test(account)) {
       return fail(
         res,
         400,
-        'bad_phone'
+        isCrypto ? 'bad_address' : 'bad_phone'
       );
     }
 
-    if (holderName.length < 3) {
+    if (!isCrypto && holderName.length < 3) {
       return fail(
         res,
         400,
@@ -3359,6 +3181,19 @@ app.post(
       );
     }
 
+    const needAdds = Number(S.withdraw_adds_required || 0);
+
+    if (needAdds > 0) {
+      const haveAdds = await countGroupAdds(u.id, S);
+
+      if (haveAdds < needAdds) {
+        return fail(res, 403, 'need_adds', {
+          have: haveAdds,
+          need: needAdds
+        });
+      }
+    }
+
     const cap = (
       await q(
         `SELECT
@@ -3367,10 +3202,7 @@ app.post(
             0
           ) AS s
          FROM withdrawals
-         WHERE status IN (
-           'pending',
-           'paid'
-         )
+         WHERE status IN ('pending','processing','paid')
            AND (
              created_at
              AT TIME ZONE 'UTC'
@@ -3397,10 +3229,6 @@ app.post(
       etb * S.coin_per_etb
     );
 
-    /*
-     * Only the enabled source(s) count toward what can
-     * actually be withdrawn right now.
-     */
     const availAds = S.ads_payment_enabled
       ? Number(u.ads_coins || 0)
       : 0;
@@ -3417,10 +3245,6 @@ app.post(
       );
     }
 
-    /*
-     * Spend from ads_coins first, then invite_coins,
-     * whichever of the two is currently enabled.
-     */
     const fromAds = Math.min(
       coins,
       availAds
@@ -3481,18 +3305,31 @@ app.post(
       )
     ).rows[0];
 
-    const text =
+    let text =
       `Withdrawal #${w.id}\n` +
       `User: ${u.first_name} (ID: ${u.id}) @${u.username || '-'}\n` +
       `Amount: ${etb} ETB\n` +
       `Method: ${method}\n` +
       `Account: ${account}\n` +
-      `Holder name: ${holderName}`;
+      `Holder name: ${holderName || '-'}`;
 
-    /*
-     * Send withdrawal request
-     * to every configured admin.
-     */
+    if (isCrypto) {
+      let payLine = '';
+
+      try {
+        const qt = await cryptoQuote({ etb, method }, S);
+
+        payLine =
+          `\nNetwork: ${method === 'bep20' ? 'BEP20 (BNB Smart Chain)' : 'TON'}` +
+          `\nFee: ${S.withdraw_fee_percent || 0}%` +
+          `\nWill pay: ${qt.amount} ${qt.asset}`;
+      } catch (e) {
+        payLine = `\nNetwork: ${method.toUpperCase()}\n(Quote error: ${e.message})`;
+      }
+
+      text += payLine + '\n\nPress Approve & Pay to send the crypto automatically.';
+    }
+
     for (const adminId of ADMIN_IDS) {
       await tg(
         'sendMessage',
@@ -3503,7 +3340,7 @@ app.post(
             inline_keyboard: [
               [
                 {
-                  text: '✅ Paid',
+                  text: isCrypto ? '✅ Approve & Pay' : '✅ Paid',
                   style: 'success',
                   callback_data:
                     `w:a:${w.id}`
@@ -3541,8 +3378,6 @@ app.post(
     });
   })
 );
-
-/* ---------- admin overview ---------- */
 
 app.get(
   '/api/admin/overview',
@@ -3649,8 +3484,6 @@ app.get(
   })
 );
 
-/* ---------- admin settings ---------- */
-
 app.post(
   '/api/admin/setting',
   auth,
@@ -3737,7 +3570,70 @@ app.post(
   })
 );
 
-/* ---------- admin tasks ---------- */
+app.post(
+  '/api/admin/channel',
+  auth,
+  adminOnly,
+  ah(async (req, res) => {
+    const b = req.body || {};
+    const S = await settings();
+
+    const list = Array.isArray(S.gate_channels) && S.gate_channels.length
+      ? [...S.gate_channels]
+      : [];
+
+    const rewards = { ...(S.channel_rewards || {}) };
+    const meta = { ...(S.channel_meta || {}) };
+
+    const toChat = (v) => {
+      const m = /^(?:https?:\/\/)?(?:t\.me\/)?@?([A-Za-z][A-Za-z0-9_]{3,})\/?$/.exec(
+        String(v || '').trim()
+      );
+
+      return m ? '@' + m[1] : null;
+    };
+
+    const chat = toChat(b.link || b.chat);
+
+    if (!chat) {
+      return fail(res, 400, 'bad_channels');
+    }
+
+    if (b.action === 'remove') {
+      const i = list.indexOf(chat);
+      if (i >= 0) list.splice(i, 1);
+      delete rewards[chat];
+      delete meta[chat];
+    } else {
+      const title = String(b.title || '').trim().slice(0, 40);
+      const reward = Number(b.reward);
+
+      if (!title || !(reward >= 0)) {
+        return fail(res, 400, 'bad_input');
+      }
+
+      const info = await tg('getChat', { chat_id: chat });
+
+      if (!info.ok) {
+        return fail(res, 400, 'bad_channels', {
+          detail: info.description
+        });
+      }
+
+      if (!list.includes(chat)) list.push(chat);
+
+      rewards[chat] = reward;
+      meta[chat] = { title, link: 'https://t.me/' + chat.slice(1) };
+    }
+
+    await saveSettingRow('gate_channels', list);
+    await saveSettingRow('channel_rewards', rewards);
+    await saveSettingRow('channel_meta', meta);
+
+    res.json({ ok: true });
+  })
+);
+
 
 app.post(
   '/api/admin/task',
@@ -3840,12 +3736,6 @@ app.post(
     const taskId = ins.rows[0].id;
 
     if (b.broadcast) {
-      /*
-       * Fire off in the background so the request
-       * doesn't hang waiting on every user — for a
-       * very large user base, move this to a proper
-       * job queue instead.
-       */
       broadcastTask(
         taskId,
         title,
@@ -3866,12 +3756,6 @@ app.post(
   })
 );
 
-/*
- * Sends the new task to every non-banned user with a
- * single "✅ Start" inline button that opens the mini
- * app. Tracks each message so it can be deleted once
- * the task's slots fill up (see deleteTaskBroadcast).
- */
 async function broadcastTask(taskId, title, reward, sponsor) {
   const { rows } = await q(
     'SELECT id FROM users WHERE NOT banned'
@@ -3922,9 +3806,6 @@ async function broadcastTask(taskId, title, reward, sponsor) {
       );
     }
 
-    /*
-     * Stay under Telegram's ~30 msg/sec limit.
-     */
     await new Promise((r2) =>
       setTimeout(r2, 40)
     );
@@ -3948,8 +3829,6 @@ app.post(
     });
   })
 );
-
-/* ---------- admin promo ---------- */
 
 app.post(
   '/api/admin/promo',
@@ -4015,13 +3894,6 @@ app.post(
   })
 );
 
-/* ---------- admin broadcast ---------- */
-
-/*
- * keyboard (optional): [{ text: 'Open', url: 'https://...' }]
- * — a single-button row shown under the broadcast message.
- * Pass null/undefined for a plain text broadcast.
- */
 async function broadcastAll(text, keyboard) {
   const { rows } = await q(
     'SELECT id FROM users WHERE NOT banned'
@@ -4090,10 +3962,6 @@ app.post(
       keyboard = [{ text: btnText, url: btnUrl }];
     }
 
-    /*
-     * Fire in the background — don't make the admin
-     * panel wait for every user to be messaged.
-     */
     broadcastAll(text, keyboard)
       .then((sent) =>
         console.log('broadcast sent to', sent)
@@ -4105,8 +3973,6 @@ app.post(
     res.json({ ok: true });
   })
 );
-
-/* ---------- admin: post daily leaderboard to proof channel ---------- */
 
 app.post(
   '/api/admin/daily-leaderboard/post',
@@ -4157,8 +4023,6 @@ app.post(
     res.json({ ok: true });
   })
 );
-
-/* ---------- admin user ---------- */
 
 app.post(
   '/api/admin/user',
@@ -4218,14 +4082,579 @@ app.post(
   })
 );
 
-/* ---------- Telegram bot webhook ---------- */
+const tonUsdCache = { t: 0, v: 0 };
+
+function availableMethods() {
+  return Object.keys(WITHDRAW_METHODS).filter((m) =>
+    ENABLED_METHODS.includes(m)
+  );
+}
+
+let cryptoColsReady = null;
+
+function ensureCryptoCols() {
+  if (!cryptoColsReady) {
+    cryptoColsReady = q(
+      `ALTER TABLE withdrawals
+         ADD COLUMN IF NOT EXISTS tx_hash text,
+         ADD COLUMN IF NOT EXISTS paid_amount numeric,
+         ADD COLUMN IF NOT EXISTS paid_asset text,
+         ADD COLUMN IF NOT EXISTS pay_error text`
+    ).catch((e) => {
+      cryptoColsReady = null;
+      throw e;
+    });
+  }
+
+  return cryptoColsReady;
+}
+
+async function getTonUsd(S) {
+  if (Date.now() - tonUsdCache.t < 300000 && tonUsdCache.v > 0) {
+    return tonUsdCache.v;
+  }
+
+  try {
+    const r = await fetch(
+      'https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd',
+      { signal: AbortSignal.timeout(5000) }
+    );
+
+    const j = await r.json();
+    const p = Number(j && j['the-open-network'] && j['the-open-network'].usd);
+
+    if (p > 0) {
+      tonUsdCache.t = Date.now();
+      tonUsdCache.v = p;
+      return p;
+    }
+  } catch (e) {
+    console.error('ton price', e.message);
+  }
+
+  const fb = Number((S && S.ton_usd_price) || 0);
+
+  if (fb > 0) return fb;
+
+  throw new Error('TON price unavailable (set ton_usd_price in admin settings).');
+}
+
+async function cryptoQuote(w, S) {
+  const etb = Number(w.etb);
+  const fee = Number(S.withdraw_fee_percent || 0);
+  const perUsd = Number(S.etb_per_usd || 0);
+
+  if (!(perUsd > 0)) {
+    throw new Error('Set etb_per_usd in admin settings first.');
+  }
+
+  const feeEtb = Math.round(etb * fee) / 100;
+  const finalEtb = Math.round((etb - feeEtb) * 100) / 100;
+  const usd = finalEtb / perUsd;
+
+  if (w.method === 'bep20') {
+    return {
+      asset: 'USDT',
+      amount: Math.floor(usd * 100) / 100,
+      feeEtb,
+      finalEtb,
+      fee
+    };
+  }
+
+  const price = await getTonUsd(S);
+
+  return {
+    asset: 'TON',
+    amount: Math.floor((usd / price) * 10000) / 10000,
+    feeEtb,
+    finalEtb,
+    fee
+  };
+}
+
+async function payBep20(to, amount, onSent) {
+  const { ethers } = require('ethers');
+
+  const provider = new ethers.JsonRpcProvider(BSC_RPC);
+  const wallet = new ethers.Wallet(BSC_PRIVATE_KEY, provider);
+
+  const usdt = new ethers.Contract(
+    USDT_BSC,
+    [
+      'function transfer(address,uint256) returns (bool)',
+      'function balanceOf(address) view returns (uint256)'
+    ],
+    wallet
+  );
+
+  const value = ethers.parseUnits(amount.toFixed(2), 18);
+
+  const bal = await usdt.balanceOf(wallet.address);
+
+  if (bal < value) {
+    throw new Error('Not enough USDT in the BEP20 payout wallet.');
+  }
+
+  const tx = await usdt.transfer(to, value);
+
+  await onSent(tx.hash);
+
+  return { hash: tx.hash };
+}
+
+function b64ToHex(h) {
+  return /^[0-9a-fA-F]{64}$/.test(h)
+    ? h.toLowerCase()
+    : Buffer.from(h, 'base64').toString('hex');
+}
+
+async function tonTxHashByMessage(msgHash) {
+  for (let i = 0; i < 3; i++) {
+    await sleepMs(1500);
+
+    try {
+      const r = await fetch(
+        `https://toncenter.com/api/v3/transactionsByMessage?msg_hash=${msgHash}&direction=in&limit=1`,
+        {
+          headers: TONCENTER_API_KEY ? { 'X-API-Key': TONCENTER_API_KEY } : {},
+          signal: AbortSignal.timeout(4000)
+        }
+      );
+
+      const j = await r.json();
+      const tx = j && j.transactions && j.transactions[0];
+
+      if (tx && tx.hash) return b64ToHex(tx.hash);
+    } catch (e) {
+    }
+  }
+
+  return null;
+}
+
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function payTon(to, amount, memo, onSent) {
+  const {
+    TonClient,
+    WalletContractV4,
+    WalletContractV5R1,
+    internal,
+    external,
+    storeMessage,
+    SendMode,
+    Address,
+    toNano,
+    beginCell
+  } = require('@ton/ton');
+
+  const { mnemonicToPrivateKey } = require('@ton/crypto');
+
+  const key = await mnemonicToPrivateKey(
+    TON_MNEMONIC.trim().split(/\s+/)
+  );
+
+  const target = Address.parse(TON_WALLET_ADDRESS);
+
+  const candidates = [];
+
+  if (WalletContractV5R1) {
+    candidates.push(
+      WalletContractV5R1.create({ publicKey: key.publicKey, workchain: 0 })
+    );
+  }
+
+  candidates.push(
+    WalletContractV4.create({ publicKey: key.publicKey, workchain: 0 })
+  );
+
+  const wallet = candidates.find((c) => c.address.equals(target));
+
+  if (!wallet) {
+    throw new Error(
+      'TON_MNEMONIC does not belong to ' + TON_WALLET_ADDRESS + ' (payout refused).'
+    );
+  }
+
+  const client = new TonClient({
+    endpoint: TONCENTER_ENDPOINT,
+    apiKey: TONCENTER_API_KEY || undefined
+  });
+
+  const contract = client.open(wallet);
+
+  const value = toNano(amount.toFixed(4));
+  const balance = await contract.getBalance();
+
+  if (balance < value + toNano('0.05')) {
+    throw new Error('Not enough TON in the payout wallet.');
+  }
+
+  const seqno = await contract.getSeqno();
+
+  const transfer = contract.createTransfer({
+    seqno,
+    secretKey: key.secretKey,
+    sendMode: SendMode.PAY_GAS_SEPARATELY + SendMode.IGNORE_ERRORS,
+    messages: [
+      internal({
+        to: Address.parse(to),
+        value,
+        bounce: false,
+        body: memo
+      })
+    ]
+  });
+
+  await contract.send(transfer);
+
+  const ext = external({
+    to: wallet.address,
+    init: seqno === 0 ? wallet.init : undefined,
+    body: transfer
+  });
+
+  const msgHash = beginCell()
+    .store(storeMessage(ext))
+    .endCell()
+    .hash()
+    .toString('hex');
+
+  await onSent(msgHash);
+
+  const txHash = await tonTxHashByMessage(msgHash);
+
+  return { hash: txHash || msgHash };
+}
+
+const explorerLink = (method, hash) =>
+  method === 'bep20'
+    ? `https://bscscan.com/tx/${hash}`
+    : `https://tonviewer.com/transaction/${hash}`;
+
+const shortAddr = (a) =>
+  a.length > 16 ? `${a.slice(0, 6)}...${a.slice(-6)}` : a;
+
+async function approveCryptoWithdrawal(id, cq) {
+  await ensureCryptoCols();
+
+  const claim = await q(
+    `UPDATE withdrawals
+     SET status='processing', decided_at=now(), pay_error=NULL
+     WHERE id=$1 AND status='pending' AND method = ANY($2)
+     RETURNING *`,
+    [id, CRYPTO_METHODS]
+  );
+
+  if (!claim.rowCount) {
+    return { note: 'Already handled' };
+  }
+
+  const w = claim.rows[0];
+  const S = await settings();
+
+  try {
+    const quote = await cryptoQuote(
+      { etb: Number(w.etb), method: w.method },
+      S
+    );
+
+    if (!(quote.amount > 0)) {
+      throw new Error('Amount is too small to send.');
+    }
+
+    const onSent = (hash) =>
+      q(
+        `UPDATE withdrawals
+         SET tx_hash=$2, paid_amount=$3, paid_asset=$4
+         WHERE id=$1`,
+        [w.id, hash, quote.amount, quote.asset]
+      );
+
+    const sent =
+      w.method === 'bep20'
+        ? await payBep20(w.account, quote.amount, onSent)
+        : await payTon(w.account, quote.amount, `Adewa #${w.id}`, onSent);
+
+    await q(
+      `UPDATE withdrawals
+       SET status='paid', tx_hash=$2, paid_amount=$3, paid_asset=$4,
+           pay_error=NULL, decided_at=now()
+       WHERE id=$1`,
+      [w.id, sent.hash, quote.amount, quote.asset]
+    );
+
+    const link = explorerLink(w.method, sent.hash);
+    const net = w.method === 'bep20' ? 'BEP20' : 'TON';
+
+    await tg('sendMessage', {
+      chat_id: w.user_id,
+      text:
+        `💸 Withdrawal paid\n` +
+        `----------------\n` +
+        `🌐 Network: ${net}\n` +
+        `💵 Amount: ${quote.amount} ${quote.asset}\n` +
+        `🔗 Hash: ${sent.hash}\n` +
+        `🔍 Status: Paid\n` +
+        `-------------------------------\n\n` +
+        `🤖 Proof channel: ${PROOF_CHANNEL}`,
+      reply_markup: {
+        inline_keyboard: [[{ text: 'View transaction', url: link }]]
+      }
+    });
+
+    const usr = (
+      await q('SELECT first_name, username FROM users WHERE id=$1', [w.user_id])
+    ).rows[0] || {};
+
+    const who = '@' + (usr.username || usr.first_name || 'user');
+
+    const proof = await tg('sendMessage', {
+      chat_id: PROOF_CHANNEL,
+      text:
+        `💸 New Withdrawal Approved\n` +
+        `----------------\n` +
+        `👤 User: ${who}\n` +
+        `🌐 Network: ${net} (${quote.asset})\n` +
+        `📮 Address: ${shortAddr(w.account)}\n` +
+        `💵 Requested Amount: ${Number(w.etb).toFixed(2)} Birr\n` +
+        `📉 ${quote.fee}% Service Fee: ${quote.feeEtb.toFixed(2)} Birr\n` +
+        `💰 Final Amount: ${quote.amount} ${quote.asset}\n` +
+        `🔗 Hash: ${sent.hash}\n` +
+        `🔍 Status: Paid\n` +
+        `-------------------------------\n\n` +
+        `🤖 Bot: ${BOT_USERNAME ? '@' + BOT_USERNAME : '-'}`,
+      disable_web_page_preview: true,
+      reply_markup: {
+        inline_keyboard: [[{ text: 'View on explorer', url: link }]]
+      }
+    });
+
+    if (!proof.ok) {
+      console.error('proof channel post', proof.description);
+
+      await tg('sendMessage', {
+        chat_id: cq.from.id,
+        text: `Paid, but posting to the proof channel failed: ${proof.description}\nHash: ${sent.hash}`
+      });
+    }
+
+    await tg('sendMessage', {
+      chat_id: cq.from.id,
+      text:
+        `Withdrawal #${w.id} paid: ${quote.amount} ${quote.asset}\n` +
+        `Hash: ${sent.hash}\n${link}`,
+      disable_web_page_preview: true
+    });
+
+    return { note: '✅ Paid ' + quote.amount + ' ' + quote.asset };
+  } catch (e) {
+    console.error('crypto payout', w.id, e);
+
+    const msg = String((e && e.message) || e).slice(0, 300);
+
+    const cur = (
+      await q('SELECT tx_hash FROM withdrawals WHERE id=$1', [w.id])
+    ).rows[0];
+
+    if (cur && cur.tx_hash) {
+      await q('UPDATE withdrawals SET pay_error=$2 WHERE id=$1', [w.id, msg]);
+
+      await tg('sendMessage', {
+        chat_id: cq.from.id,
+        text:
+          `Withdrawal #${w.id}: the transfer was broadcast (hash ${cur.tx_hash}) ` +
+          `but a later step failed: ${msg}\nCheck it on the explorer, do NOT pay again.`
+      });
+
+      return { note: '⚠️ Sent - check manually' };
+    }
+
+    await q(
+      `UPDATE withdrawals SET status='pending', pay_error=$2 WHERE id=$1`,
+      [w.id, msg]
+    );
+
+    await tg('sendMessage', {
+      chat_id: cq.from.id,
+      text:
+        `Payout #${w.id} failed, nothing was sent:\n${msg}\n\n` +
+        `It is still pending. Fix the problem and press Approve & Pay again.`
+    });
+
+    return { note: '❌ Payout failed', retry: true };
+  }
+}
+
+let groupAddsReady = null;
+
+function ensureGroupAdds() {
+  if (!groupAddsReady) {
+    groupAddsReady = q(
+      `CREATE TABLE IF NOT EXISTS group_adds (
+        chat_id BIGINT NOT NULL,
+        member_id BIGINT NOT NULL,
+        adder_id BIGINT NOT NULL,
+        left_chat BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (chat_id, member_id)
+      )`
+    )
+      .then(() => q('CREATE INDEX IF NOT EXISTS group_adds_adder_idx ON group_adds (adder_id)'))
+      .catch((e) => {
+        groupAddsReady = null;
+        throw e;
+      });
+  }
+
+  return groupAddsReady;
+}
+
+async function countGroupAdds(userId, S) {
+  if (!S.add_group_id) return 0;
+
+  await ensureGroupAdds();
+
+  const r = await q(
+    'SELECT COUNT(*)::int AS c FROM group_adds WHERE adder_id=$1 AND chat_id=$2 AND NOT left_chat',
+    [userId, S.add_group_id]
+  );
+
+  return r.rows[0].c;
+}
+
+async function trackGroupAdds(m, S) {
+  if (!S.add_group_id || String(m.chat.id) !== String(S.add_group_id)) return;
+
+  await ensureGroupAdds();
+
+  if (m.left_chat_member) {
+    await q(
+      'UPDATE group_adds SET left_chat=TRUE WHERE chat_id=$1 AND member_id=$2',
+      [m.chat.id, m.left_chat_member.id]
+    );
+    return;
+  }
+
+  const adder = m.from;
+
+  if (!adder || adder.is_bot) return;
+
+  for (const nm of m.new_chat_members || []) {
+    if (nm.is_bot || nm.id === adder.id) continue;
+
+    await q(
+      `INSERT INTO group_adds (chat_id, member_id, adder_id)
+       VALUES ($1,$2,$3)
+       ON CONFLICT (chat_id, member_id) DO UPDATE
+         SET left_chat=FALSE, adder_id=EXCLUDED.adder_id
+         WHERE group_adds.left_chat`,
+      [m.chat.id, nm.id, adder.id]
+    );
+  }
+}
+
+async function handleJoined(cq) {
+  const S = await settings();
+  const chans = gateChans(S);
+  const uid = cq.from.id;
+  const chatId = cq.message && cq.message.chat.id;
+  const msgId = cq.message && cq.message.message_id;
+
+  await ensureUser(cq.from, null);
+
+  const ban = (
+    await q(
+      `SELECT u.banned, f.status
+       FROM users u LEFT JOIN fraud_users f ON f.telegram_id=u.id
+       WHERE u.id=$1`,
+      [uid]
+    )
+  ).rows[0];
+
+  if (ban && (ban.banned || ban.status === 'banned')) {
+    await tg('answerCallbackQuery', {
+      callback_query_id: cq.id,
+      text: 'Your account has been banned.',
+      show_alert: true
+    });
+    return;
+  }
+
+  const res = await Promise.all(
+    chans.map(async (c) => ({ c, ok: await isChannelMember(c, uid) }))
+  );
+
+  const missing = res.filter((x) => !x.ok);
+
+  if (missing.length) {
+    await tg('answerCallbackQuery', {
+      callback_query_id: cq.id,
+      text: `You still need to join ${missing.length} channel(s).`,
+      show_alert: true
+    });
+
+    if (chatId) {
+      await tg('editMessageText', {
+        chat_id: chatId,
+        message_id: msgId,
+        text:
+          'Step 1 - join all required channels:\n' +
+          res.map((x) => (x.ok ? '✅ ' : '❌ ') + channelInfo(S, x.c).title).join('\n') +
+          '\n\nThen press "Joined".',
+        reply_markup: {
+          inline_keyboard: [
+            ...res
+              .filter((x) => !x.ok)
+              .map((x) => {
+                const i = channelInfo(S, x.c);
+                return [{ text: '📢 ' + i.title, url: i.url }];
+              }),
+            [{ text: '✅ Joined', callback_data: 'joined', style: 'success' }]
+          ]
+        }
+      }).catch(() => {});
+    }
+
+    return;
+  }
+
+  await tg('answerCallbackQuery', {
+    callback_query_id: cq.id,
+    text: 'All channels joined ✅'
+  });
+
+  if (chatId) {
+    await tg('editMessageText', {
+      chat_id: chatId,
+      message_id: msgId,
+      text:
+        'All required channels joined ✅\n\n' +
+        'Tap the button to open Adewa. Channels are checked again and your account ' +
+        'is verified (VPN / multiple accounts) when the app opens.',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: 'Open Adewa', style: 'success', web_app: { url: MINI_APP_URL } }]
+        ]
+      }
+    });
+  }
+
+  /* if the app was already verified, pay the inviter right away */
+  await tryPayFullReferral(uid).catch(() => {});
+}
+
 
 async function handleUpdate(u) {
   if (u.message) {
     const m = u.message;
     const from = m.from;
 
-    /* ---------- /start ---------- */
+    if (m.new_chat_members || m.left_chat_member) {
+      await trackGroupAdds(m, await settings());
+      return;
+    }
 
     if (
       m.text &&
@@ -4247,35 +4676,47 @@ async function handleUpdate(u) {
         ? `\n\nNeed help? Contact @${S0.support_bot_username}`
         : '';
 
-      await tg(
-        'sendMessage',
-        {
-          chat_id: m.chat.id,
-          text: (r
-            ? 'Welcome to Adewa! You were invited by a friend — tap the button below to open the app.'
-            : 'Welcome to Adewa. Tap the button to open the app.') + supportLine,
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text:
-                    'Open Adewa',
-                  style: 'success',
-                  web_app: {
-                    url:
-                      MINI_APP_URL
-                  }
-                }
-              ]
-            ]
-          }
+          const chansS = gateChans(S0);
+
+    if (chansS.length) {
+      const lines = chansS.map((c) => '• ' + channelInfo(S0, c).title).join('\n');
+
+      await tg('sendMessage', {
+        chat_id: m.chat.id,
+        text:
+          (r
+            ? 'Welcome to Adewa! You were invited by a friend.\n\n'
+            : 'Welcome to Adewa!\n\n') +
+          'Step 1 - join all required channels:\n' +
+          lines +
+          '\n\nThen press "Joined".' +
+          supportLine,
+        reply_markup: {
+          inline_keyboard: [
+            ...chansS.map((c) => {
+              const i = channelInfo(S0, c);
+              return [{ text: '📢 ' + i.title, url: i.url }];
+            }),
+            [{ text: '✅ Joined', callback_data: 'joined', style: 'success' }]
+          ]
         }
-      );
+      });
 
       return;
     }
 
-    /* ---------- /ban  /unban (admin) ---------- */
+    await tg('sendMessage', {
+      chat_id: m.chat.id,
+      text: 'Welcome to Adewa. Tap the button to open the app.' + supportLine,
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: 'Open Adewa', style: 'success', web_app: { url: MINI_APP_URL } }]
+        ]
+      }
+    });
+
+    return;
+    }
 
     if (
       m.text &&
@@ -4315,8 +4756,6 @@ async function handleUpdate(u) {
       return;
     }
 
-    /* ---------- /skip ---------- */
-
     if (
       m.text === '/skip' &&
       isAdmin(from.id)
@@ -4336,8 +4775,6 @@ async function handleUpdate(u) {
 
       return;
     }
-
-    /* ---------- /topearners ---------- */
 
     if (
       m.text === '/topearners' &&
@@ -4397,8 +4834,6 @@ async function handleUpdate(u) {
       return;
     }
 
-    /* ---------- /broadcast ---------- */
-
     if (
       m.text &&
       m.text.startsWith('/broadcast ') &&
@@ -4408,11 +4843,6 @@ async function handleUpdate(u) {
         .slice('/broadcast '.length)
         .trim();
 
-      /*
-       * /broadcast <message> || <button text> || <button url>
-       * The "|| button || url" part is optional — plain
-       * "/broadcast <message>" still works exactly as before.
-       */
       const parts = raw.split('||').map((p) => p.trim());
       const text = parts[0];
       let keyboard = null;
@@ -4444,8 +4874,6 @@ async function handleUpdate(u) {
       return;
     }
 
-    /* ---------- /setfaq (NEW, admin) ---------- */
-
     if (
       m.text &&
       m.text.startsWith('/setfaq ') &&
@@ -4475,8 +4903,6 @@ async function handleUpdate(u) {
       return;
     }
 
-    /* ---------- /faqon /faqoff (NEW, admin) ---------- */
-
     if (
       (m.text === '/faqon' ||
         m.text === '/faqoff') &&
@@ -4503,12 +4929,6 @@ async function handleUpdate(u) {
 
       return;
     }
-
-    /* ---------- AI FAQ auto-reply (NEW) ----------
-     * Any plain text message that isn't a command and
-     * wasn't matched by anything above gets an instant
-     * AI-generated answer, acting like a second admin.
-     */
 
     if (
       m.text &&
@@ -4553,15 +4973,11 @@ async function handleUpdate(u) {
       return;
     }
 
-    /* ---------- photo ---------- */
-
     if (m.photo) {
       const fileId =
         m.photo[
           m.photo.length - 1
         ].file_id;
-
-      /* Payment proof from admin */
 
       if (isAdmin(from.id)) {
         const a = (
@@ -4633,8 +5049,6 @@ async function handleUpdate(u) {
         }
       }
 
-      /* ---------- task proof ---------- */
-
       const s = (
         await q(
           `SELECT
@@ -4672,9 +5086,6 @@ async function handleUpdate(u) {
         [s.id]
       );
 
-      /*
-       * Send task proof to ALL admins.
-       */
       for (const adminId of ADMIN_IDS) {
         await tg(
           'sendPhoto',
@@ -4720,19 +5131,10 @@ async function handleUpdate(u) {
     return;
   }
 
-  /* ---------- callback query ---------- */
-
   if (u.callback_query) {
     const cq =
       u.callback_query;
 
-    /*
-     * DEBUG: temporary logging to diagnose the
-     * "Approve button does nothing" report.
-     * Check these lines in Vercel > your project >
-     * Logs right after tapping the button.
-     * Remove this block once the cause is confirmed.
-     */
     console.log(
       'callback_query received:',
       'from=' + cq.from.id,
@@ -4740,9 +5142,11 @@ async function handleUpdate(u) {
       'isAdmin=' + isAdmin(cq.from.id)
     );
 
-    /*
-     * Multiple admin support.
-     */
+    if (cq.data === 'joined') {
+      await handleJoined(cq).catch((e) => console.error('joined', e));
+      return;
+    }
+
     if (!isAdmin(cq.from.id)) {
       console.log(
         'callback rejected: sender is not in ADMIN_IDS',
@@ -4771,8 +5175,7 @@ async function handleUpdate(u) {
     ).split(':');
 
     let note = 'Done';
-
-    /* ---------- task ---------- */
+    let skipEdit = false;
 
     if (kind === 't') {
       if (act === 'a') {
@@ -4875,10 +5278,21 @@ async function handleUpdate(u) {
       }
     }
 
-    /* ---------- withdrawal ---------- */
-
     else if (kind === 'w') {
-      if (act === 'a') {
+      const wrow = (
+        await q('SELECT method FROM withdrawals WHERE id=$1', [id])
+      ).rows[0];
+
+      if (
+        act === 'a' &&
+        wrow &&
+        CRYPTO_METHODS.includes(wrow.method)
+      ) {
+        const out = await approveCryptoWithdrawal(id, cq);
+
+        note = out.note;
+        skipEdit = !!out.retry;
+      } else if (act === 'a') {
         const r = await q(
           `UPDATE withdrawals
            SET status='paid',
@@ -4926,9 +5340,6 @@ async function handleUpdate(u) {
             }
           );
 
-          /*
-           * Tell the admin who clicked.
-           */
           await tg(
             'sendMessage',
             {
@@ -5010,7 +5421,7 @@ async function handleUpdate(u) {
       }
     );
 
-    if (cq.message) {
+    if (cq.message && !skipEdit) {
       await tg(
         'editMessageReplyMarkup',
         {
@@ -5034,12 +5445,6 @@ async function handleUpdate(u) {
     }
 
     } catch (e) {
-      /*
-       * Any error in the block above used to fail
-       * silently (the webhook route always answers
-       * Telegram with 200). Now the admin sees exactly
-       * what broke instead of the button doing nothing.
-       */
       console.error('callback_query error:', e);
 
       await tg('answerCallbackQuery', {
@@ -5051,19 +5456,12 @@ async function handleUpdate(u) {
   }
 }
 
-/* ---------- cron: daily streak reminder ---------- */
-
 const cronAuth = (req, res, next) =>
   CRON_SECRET &&
   req.headers['x-cron-key'] === CRON_SECRET
     ? next()
     : fail(res, 403, 'cron_forbidden');
 
-/*
- * Call this once a day (evening, local time) from
- * Vercel Cron. Warns anyone who checked in yesterday
- * but not yet today that their streak will be lost.
- */
 app.all(
   '/api/cron/streak-reminder',
   cronAuth,
@@ -5101,14 +5499,6 @@ app.all(
   })
 );
 
-/* ---------- cron: weekly rewards ---------- */
-
-/*
- * Call this once a week (e.g. Sunday night) from
- * Vercel Cron. Pays the top inviter (if they cleared
- * the minimum invite count) and gives the top
- * ad-watcher of the week unlimited ads for 7 days.
- */
 app.all(
   '/api/cron/weekly-rewards',
   cronAuth,
@@ -5119,8 +5509,6 @@ app.all(
       top_inviter: null,
       top_ad_watcher: null
     };
-
-    /* ---- top inviter ---- */
 
     const minInvites = Number(
       S.weekly_top_inviter_min || 200
@@ -5172,8 +5560,6 @@ app.all(
       result.top_inviter = inviter;
     }
 
-    /* ---- top ad watcher ---- */
-
     const watcher = (
       await q(
         `SELECT
@@ -5217,8 +5603,6 @@ app.all(
   })
 );
 
-/* ---------- webhook ---------- */
-
 app.post(
   '/api/webhook',
   async (req, res) => {
@@ -5245,8 +5629,6 @@ app.post(
     res.sendStatus(200);
   }
 );
-
-/* ---------- export ---------- */
 
 module.exports = app;
 
