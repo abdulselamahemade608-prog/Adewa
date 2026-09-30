@@ -71,7 +71,7 @@ App name: Adewa (formerly FulusApp) — a Telegram Mini App where users earn coi
 Sections: Home, Tasks, Invite, Withdraw.
 Earning sources: watching ads, completing tasks, inviting friends.
 Coins convert to Birr (ETB); the exchange rate is set by the admin (often 100 coins = 1 Birr).
-Withdraw methods: Telebirr, CBE, M-Pesa (Safaricom). Each withdrawal has a small service fee.
+Withdraw methods: Telebirr and CBE. Each withdrawal has a small service fee.
 Withdrawals are reviewed and paid manually by an admin; proof of payment is posted in the proof channel.
 Invited friends must join the required channels and be active on 2 separate days before the inviter is paid the referral reward.
 There are daily limits on ads/earnings, and VIP users (based on invite count) get higher or unlimited ad limits.
@@ -94,7 +94,7 @@ const ENABLED_METHODS = String(
 )
   .split(',')
   .map((x) => x.trim().toLowerCase())
-  .filter(Boolean);
+  .filter((x) => ['telebirr', 'cbe'].includes(x)); /* withdraw = Telebirr + CBE only */
 
 const DEFAULT_GATE_CHANNELS = [
   '@andbndj',
@@ -799,9 +799,9 @@ async function tryPayFullReferral(inviteeId, knownChannels) {
   await tg('sendMessage', {
     chat_id: u.referred_by,
     text:
-      `🎉 ${name} joined all ${chans.length} required channel(s).\\n` +
-      `You earned ${total} coins from this invite.\\n\\n` +
-      `🎉 ${name} ሁሉንም ${chans.length} ቻናል ተቀላቅለዋል።\\n` +
+      `🎉 ${name} joined all ${chans.length} required channel(s).\n` +
+      `You earned ${total} coins from this invite.\n\n` +
+      `🎉 ${name} ሁሉንም ${chans.length} ቻናል ተቀላቅለዋል።\n` +
       `በዚህ ኢንቫይት ${total} ኮይን አግኝተዋል።`
   }).catch(() => {});
 }
@@ -4609,9 +4609,9 @@ async function handleJoined(cq) {
               .filter((x) => !x.ok)
               .map((x) => {
                 const i = channelInfo(S, x.c);
-                return [{ text: '📢 ' + i.title, url: i.url }];
+                return [{ text: '📢 ' + i.title, url: i.url, style: 'success' }];
               }),
-            [{ text: '✅ Joined', callback_data: 'joined', style: 'success' }]
+            [{ text: '✅ Joined', callback_data: 'joined', style: 'primary' }]
           ]
         }
       }).catch(() => {});
@@ -4695,9 +4695,9 @@ async function handleUpdate(u) {
           inline_keyboard: [
             ...chansS.map((c) => {
               const i = channelInfo(S0, c);
-              return [{ text: '📢 ' + i.title, url: i.url }];
+              return [{ text: '📢 ' + i.title, url: i.url, style: 'success' }];
             }),
-            [{ text: '✅ Joined', callback_data: 'joined', style: 'success' }]
+            [{ text: '✅ Joined', callback_data: 'joined', style: 'primary' }]
           ]
         }
       });
