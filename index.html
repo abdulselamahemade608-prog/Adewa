@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1.0"
+>
+
+<title>Adewa - Security Check</title>
+
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+<script src="https://sad.adsgram.ai/js/sad.min.js"></script>
+
+<style>
+
+  :root {
+    --bg: #0f1117;
+    --card-bg: #171a22;
+    --border: #262a35;
+    --text: #f2f3f5;
+    --muted: #8b8f9b;
+    --accent: #4f8cff;
+    --success: #34c777;
+    --danger: #ff4d5e;
+    --warning: #ffb020;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    padding: 20px;
+  }
+
+  .card {
+    width: 100%;
+    max-width: 380px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 32px 24px;
+    text-align: center;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+  }
+
+  .icon-wrap {
+    width: 72px;
+    height: 72px;
+    margin: 0 auto 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(79, 140, 255, 0.12);
+    transition: background 0.3s ease;
+  }
+
+  .icon-wrap.success { background: rgba(52, 199, 119, 0.12); }
+  .icon-wrap.danger  { background: rgba(255, 77, 94, 0.12); }
+  .icon-wrap.warning { background: rgba(255, 176, 32, 0.12); }
+
+  .icon {
+    width: 34px;
+    height: 34px;
+  }
+
+  .icon-wrap.success .icon { color: var(--success); }
+  .icon-wrap.danger  .icon { color: var(--danger); }
+  .icon-wrap.warning .icon { color: var(--warning); }
+  .icon-wrap.error   .icon { color: var(--danger); }
+
+  .spinner {
+    width: 34px;
+    height: 34px;
+    border: 3px solid rgba(79, 140, 255, 0.25);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  h2 {
+    margin: 0 0 8px;
+    font-size: 19px;
+    font-weight: 600;
+  }
+
+  p.desc {
+    margin: 0;
+    font-size: 14px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  .badge {
+    display: inline-block;
+    margin-top: 16px;
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+
+  .badge.danger {
+    background: rgba(255, 77, 94, 0.15);
+    color: var(--danger);
+  }
+
+  .badge.warning {
+    background: rgba(255, 176, 32, 0.15);
+    color: var(--warning);
+  }
+
+  .retry-btn {
+    margin-top: 20px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 11px 22px;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    display: none;
+  }
+
+  .retry-btn:active {
+    opacity: 0.85;
+  }
+
+
+  /* ---------- Earn screen (shown after verification) ---------- */
+
+  #app {
+    display: none;
+    width: 100%;
+    max-width: 380px;
+  }
+
+  .balance-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 24px;
+    text-align: center;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+  }
+
+  .balance-label {
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .balance-amount {
+    margin: 6px 0 14px;
+    font-size: 40px;
+    font-weight: 700;
+  }
+
+  .balance-split {
+    display: flex;
+    gap: 8px;
+  }
+
+  .balance-split div {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px 6px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .balance-split b {
+    display: block;
+    margin-top: 2px;
+    font-size: 15px;
+    color: var(--text);
+  }
+
+  .ad-card {
+    margin-top: 14px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 20px 24px;
+    text-align: center;
+  }
+
+  .ad-card h3 {
+    margin: 0 0 4px;
+    font-size: 16px;
+  }
+
+  .ad-count {
+    margin: 0 0 14px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .ad-btn {
+    width: 100%;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 13px 22px;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .ad-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .ad-msg {
+    min-height: 18px;
+    margin: 12px 0 0;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .ad-msg.ok  { color: var(--success); }
+  .ad-msg.bad { color: var(--danger); }
+
+</style>
+
+</head>
+
+<body>
+
+<div class="card">
+
+  <div class="icon-wrap" id="iconWrap">
+    <div class="spinner" id="spinner"></div>
+    <div class="icon" id="icon" style="display:none;"></div>
+  </div>
+
+  <h2 id="title">Checking your account</h2>
+  <p class="desc" id="desc">Please wait a moment...</p>
+
+  <span class="badge" id="badge" style="display:none;"></span>
+
+  <button class="retry-btn" id="retryBtn">Try Again</button>
+
+</div>
+
+<div id="app">
+
+  <div class="balance-card">
+    <div class="balance-label">Total balance</div>
+    <div class="balance-amount"><span id="balTotal">0</span> coins</div>
+    <div class="balance-split">
+      <div>Ads<b id="balAds">0</b></div>
+      <div>Invite<b id="balInvite">0</b></div>
+      <div>Tasks<b id="balTasks">0</b></div>
+    </div>
+  </div>
+
+  <div class="ad-card">
+    <h3>Watch ads</h3>
+    <p class="ad-count" id="adCount">Loading...</p>
+    <button class="ad-btn" id="adBtn" disabled>Watch ad</button>
+    <p class="ad-msg" id="adMsg"></p>
+  </div>
+
+</div>
+
+<script>
+
+const hasTelegram =
+  typeof window.Telegram !== 'undefined' &&
+  window.Telegram.WebApp;
+
+const tg = hasTelegram ? window.Telegram.WebApp : null;
+
+if (tg) {
+  tg.ready();
+  tg.expand();
+}
+
+/*
+=========================================================
+BACKEND BASE URL
+(frontend is on GitHub Pages, backend is on Vercel —
+must use an absolute URL, a relative path would hit
+GitHub Pages instead of the server)
+=========================================================
+*/
+
+const API_BASE = 'https://adewav2.vercel.app';
+
+/*
+=========================================================
+ICONS (one clearly distinct shape per state — no emoji)
+=========================================================
+*/
+
+const ICONS = {
+
+  // Shield with an X — VPN / proxy / general ban
+  shield: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="M9.5 9.5l5 5M14.5 9.5l-5 5"/></svg>`,
+
+  // Two overlapping people — multiple accounts
+  users: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
+
+  // Check circle — success
+  check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>`,
+
+  // Triangle with exclamation — warning (open in Telegram)
+  warning: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m10.29 3.86-8.18 14.14A1.5 1.5 0 0 0 3.4 20.5h17.2a1.5 1.5 0 0 0 1.3-2.5L13.71 3.86a1.5 1.5 0 0 0-2.42 0Z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>`,
+
+  // X circle — generic verification failure
+  xCircle: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6M9 9l6 6"/></svg>`,
+
+  // Wi-Fi off — connection / timeout errors
+  wifiOff: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" x2="22" y1="2" y2="22"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 4.17-2.65"/><path d="M10.66 5c4.01-.36 8.14.9 11.34 3.76"/><path d="M16.85 11.25a10 10 0 0 1 2.22 1.68"/><path d="M5 13a10 10 0 0 1 5.24-2.76"/><line x1="12" x2="12.01" y1="20" y2="20"/></svg>`
+};
+
+const els = {
+  iconWrap: document.getElementById('iconWrap'),
+  spinner: document.getElementById('spinner'),
+  icon: document.getElementById('icon'),
+  title: document.getElementById('title'),
+  desc: document.getElementById('desc'),
+  badge: document.getElementById('badge'),
+  retryBtn: document.getElementById('retryBtn')
+};
+
+/*
+=========================================================
+UI STATE HELPERS
+=========================================================
+*/
+
+function setState(type, { icon, title, desc, badge } = {}) {
+
+  els.spinner.style.display = (type === 'loading') ? 'block' : 'none';
+  els.icon.style.display = (type === 'loading') ? 'none' : 'block';
+
+  els.iconWrap.className = 'icon-wrap' + (type !== 'loading' ? ' ' + type : '');
+
+  if (icon) els.icon.innerHTML = ICONS[icon] || '';
+  if (title) els.title.textContent = title;
+  if (desc) els.desc.textContent = desc;
+
+  if (badge) {
+    els.badge.textContent = badge;
+    els.badge.className = 'badge ' + (type === 'success' ? 'success' : type);
+    els.badge.style.display = 'inline-block';
+  } else {
+    els.badge.style.display = 'none';
+  }
+
+  els.retryBtn.style.display = (type === 'error') ? 'inline-block' : 'none';
+}
+
+/*
+=========================================================
+DEVICE INSTALLATION ID
+=========================================================
+*/
+
+let deviceId = localStorage.getItem('device_installation_id');
+
+if (!deviceId) {
+  deviceId = crypto.randomUUID();
+  localStorage.setItem('device_installation_id', deviceId);
+}
+
+/*
+=========================================================
+BAN REASON TEXT (matches backend ban_reason / getBanType logic)
+=========================================================
+*/
+
+function describeBan(reason) {
+
+  const r = String(reason || '').toLowerCase();
+
+  if (r.includes('vpn') || r.includes('proxy') || r.includes('tor')) {
+    return {
+      icon: 'shield',
+      title: 'Access Blocked',
+      desc: 'A VPN or proxy connection was detected. Please disable it and use a normal network to continue.',
+      badge: 'VPN / PROXY DETECTED'
+    };
+  }
+
+  if (r.includes('multiple') || r.includes('same device') || r.includes('same ip')) {
+    return {
+      icon: 'users',
+      title: 'Access Blocked',
+      desc: 'Multiple Telegram accounts were detected from this device or network. Only one account is allowed.',
+      badge: 'MULTIPLE ACCOUNTS DETECTED'
+    };
+  }
+
+  return {
+    icon: 'shield',
+    title: 'Account Banned',
+    desc: 'Your account has been permanently banned from Adewa.',
+    badge: 'BANNED'
+  };
+}
+
+/*
+=========================================================
+FETCH WITH TIMEOUT (fixes the "stuck on Checking..." issue)
+=========================================================
+*/
+
+function fetchWithTimeout(url, options, timeoutMs) {
+
+  const controller = new AbortController();
+
+  const timer = setTimeout(
+    () => controller.abort(),
+    timeoutMs
+  );
+
+  return fetch(url, { ...options, signal: controller.signal })
+    .finally(() => clearTimeout(timer));
+}
+
+/*
+=========================================================
+AUTHENTICATE
+=========================================================
+*/
+
+async function authenticate() {
+
+  setState('loading', {
+    title: 'Checking your account',
+    desc: 'Please wait a moment...'
+  });
+
+  if (!hasTelegram) {
+
+    setState('warning', {
+      icon: 'warning',
+      title: 'Open in Telegram',
+      desc: 'This page must be opened as a Telegram Mini App, not in a regular browser.'
+    });
+
+    return;
+  }
+
+  const initData = tg.initData;
+
+  if (!initData) {
+
+    setState('warning', {
+      icon: 'warning',
+      title: 'Open in Telegram',
+      desc: 'This app must be opened from inside Telegram.',
+    });
+
+    return;
+  }
+
+  try {
+
+    const response = await fetchWithTimeout(
+      API_BASE + '/api/auth',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-init-data': initData,
+          'x-device': deviceId
+        }
+      },
+      15000 // 15s timeout instead of hanging forever
+    );
+
+    const data = await response.json();
+
+    // ---------------------------------------------------
+    // BANNED (backend returns status: 'banned', reason: "...")
+    // ---------------------------------------------------
+
+    if (data.status === 'banned') {
+
+      const info = describeBan(data.reason);
+
+      setState('danger', info);
+
+      return;
+    }
+
+    // ---------------------------------------------------
+    // VERIFIED / SUCCESS
+    // ---------------------------------------------------
+
+    if (data.ok && data.status === 'verified') {
+
+      setState('success', {
+        icon: 'check',
+        title: 'Verified',
+        desc: 'Security check passed successfully.'
+      });
+
+      setTimeout(() => {
+        showApp();
+      }, 800);
+
+      return;
+    }
+
+    // ---------------------------------------------------
+    // INVALID / OTHER ERROR FROM SERVER
+    // ---------------------------------------------------
+
+    setState('error', {
+      icon: 'xCircle',
+      title: 'Verification Failed',
+      desc: data.message || 'Something went wrong. Please try again.'
+    });
+
+  } catch (error) {
+
+    console.error(error);
+
+    const timedOut = (error.name === 'AbortError');
+
+    setState('error', {
+      icon: 'wifiOff',
+      title: timedOut ? 'Connection Timed Out' : 'Connection Error',
+      desc: error.name + ': ' + error.message + ' | ' + API_BASE
+    });
+  }
+}
+
+/*
+=========================================================
+EARN: BALANCE + WATCH ADS
+=========================================================
+*/
+
+const ADSGRAM_BLOCK_ID = '50476';
+
+// Monetag fallback: put the name of the Monetag SDK show-function here
+// (the one from your Monetag zone script). Leave empty to disable.
+const MONETAG_FN = '';
+
+const earn = {
+  state: null,
+  busy: false,
+  timer: null
+};
+
+const adEls = {
+  app: document.getElementById('app'),
+  total: document.getElementById('balTotal'),
+  ads: document.getElementById('balAds'),
+  invite: document.getElementById('balInvite'),
+  tasks: document.getElementById('balTasks'),
+  count: document.getElementById('adCount'),
+  btn: document.getElementById('adBtn'),
+  msg: document.getElementById('adMsg')
+};
+
+async function api(path) {
+  const response = await fetchWithTimeout(
+    API_BASE + path,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-init-data': tg.initData,
+        'x-device': deviceId
+      },
+      body: JSON.stringify(arguments[1] || {})
+    },
+    15000
+  );
+  return response.json();
+}
+
+function setAdMsg(text, type) {
+  adEls.msg.textContent = text || '';
+  adEls.msg.className = 'ad-msg' + (type ? ' ' + type : '');
+}
+
+function renderEarn() {
+
+  const s = earn.state;
+  if (!s) return;
+
+  adEls.total.textContent = s.coins.toLocaleString();
+  adEls.ads.textContent = s.ads_coins.toLocaleString();
+  adEls.invite.textContent = s.invite_coins.toLocaleString();
+  adEls.tasks.textContent = s.task_coins.toLocaleString();
+
+  adEls.count.textContent =
+    s.ads_today + ' / ' + s.daily_ad_limit +
+    ' ads today  ·  +' + s.coins_per_ad + ' coins each';
+
+  clearInterval(earn.timer);
+
+  const limitReached = s.ads_today >= s.daily_ad_limit;
+
+  if (limitReached) {
+    adEls.btn.disabled = true;
+    adEls.btn.textContent = 'Daily limit reached';
+    return;
+  }
+
+  if (s.cooldown_left > 0) {
+
+    let left = s.cooldown_left;
+    adEls.btn.disabled = true;
+    adEls.btn.textContent = 'Next ad in ' + left + 's';
+
+    earn.timer = setInterval(() => {
+      left--;
+      if (left <= 0) {
+        clearInterval(earn.timer);
+        s.cooldown_left = 0;
+        renderEarn();
+        return;
+      }
+      adEls.btn.textContent = 'Next ad in ' + left + 's';
+    }, 1000);
+
+    return;
+  }
+
+  adEls.btn.disabled = earn.busy;
+  adEls.btn.textContent = 'Watch ad';
+}
+
+async function showApp() {
+
+  document.querySelector('.card').style.display = 'none';
+  adEls.app.style.display = 'block';
+
+  try {
+    const data = await api('/api/me');
+    if (data.ok) {
+      earn.state = data.state;
+      renderEarn();
+    } else {
+      adEls.count.textContent = data.message || 'Could not load balance.';
+    }
+  } catch (e) {
+    adEls.count.textContent = 'Could not reach the server.';
+  }
+}
+
+// Decides at click time which network is ready (AdsGram first, Monetag next)
+async function showAdWaterfall() {
+
+  // 1) AdsGram
+  try {
+    if (window.Adsgram) {
+      const controller = window.Adsgram.init({ blockId: ADSGRAM_BLOCK_ID });
+      const result = await controller.show();
+      return { done: result && result.done === true, provider: 'adsgram' };
+    }
+  } catch (e) {
+    // no fill / error -> try the next network
+  }
+
+  // 2) Monetag
+  try {
+    if (MONETAG_FN && typeof window[MONETAG_FN] === 'function') {
+      await window[MONETAG_FN]();
+      return { done: true, provider: 'monetag' };
+    }
+  } catch (e) {
+    // no fill / error
+  }
+
+  return { done: false, provider: '', unavailable: true };
+}
+
+async function watchAd() {
+
+  if (earn.busy) return;
+
+  earn.busy = true;
+  adEls.btn.disabled = true;
+  setAdMsg('');
+
+  try {
+
+    const start = await api('/api/ads/start');
+
+    if (!start.ok) {
+      if (start.state) earn.state = start.state;
+      setAdMsg(start.message || 'Cannot start ad.', 'bad');
+      return;
+    }
+
+    const ad = await showAdWaterfall();
+
+    if (ad.unavailable) {
+      setAdMsg('No ad available right now. Try again soon.', 'bad');
+      return;
+    }
+
+    if (!ad.done) {
+      setAdMsg('Watch the full ad to get the reward.', 'bad');
+      return;
+    }
+
+    const claim = await api('/api/ads/claim', {
+      token: start.token,
+      provider: ad.provider
+    });
+
+    if (claim.ok) {
+      earn.state = claim.state;
+      setAdMsg('+' + claim.reward + ' coins added', 'ok');
+    } else {
+      setAdMsg(claim.message || 'Reward failed.', 'bad');
+    }
+
+  } catch (e) {
+
+    console.error(e);
+    setAdMsg('Connection error. Try again.', 'bad');
+
+  } finally {
+
+    earn.busy = false;
+    renderEarn();
+  }
+}
+
+adEls.btn.addEventListener('click', watchAd);
+
+els.retryBtn.addEventListener('click', authenticate);
+
+authenticate();
+
+</script>
+
+</body>
+
+</html>
