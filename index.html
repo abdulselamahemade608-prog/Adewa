@@ -1,953 +1,242 @@
 <!DOCTYPE html>
-<html lang="am">
-
+<html lang="en">
 <head>
-
 <meta charset="UTF-8">
-
-<meta
-  name="viewport"
-  content="width=device-width, initial-scale=1.0"
->
-
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Adewa - Security Check</title>
 
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-
 <script src="https://sad.adsgram.ai/js/sad.min.js"></script>
 
 <style>
-
   :root {
-    --bg: #0f1117;
-    --card-bg: #171a22;
-    --border: #262a35;
-    --text: #f2f3f5;
-    --muted: #8b8f9b;
-    --accent: #4f8cff;
-    --success: #34c777;
-    --danger: #ff4d5e;
-    --warning: #ffb020;
+    --bg: #0f1117; --card-bg: #171a22; --border: #262a35;
+    --text: #f2f3f5; --muted: #8b8f9b; --accent: #4f8cff;
+    --success: #34c777; --danger: #ff4d5e; --warning: #ffb020;
   }
-
-  * {
-    box-sizing: border-box;
-  }
-
+  * { box-sizing: border-box; }
   body {
-    margin: 0;
-    min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--bg);
-    color: var(--text);
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: var(--bg); color: var(--text); padding: 20px;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    padding: 20px;
   }
-
   .card {
-    width: 100%;
-    max-width: 380px;
-    background: var(--card-bg);
-    border: 1px solid var(--border);
-    border-radius: 18px;
-    padding: 32px 24px;
-    text-align: center;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+    width: 100%; max-width: 380px; background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: 18px; padding: 32px 24px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,.35);
   }
-
   .icon-wrap {
-    width: 72px;
-    height: 72px;
-    margin: 0 auto 20px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(79, 140, 255, 0.12);
-    transition: background 0.3s ease;
+    width: 72px; height: 72px; margin: 0 auto 20px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center; background: rgba(79,140,255,.12);
   }
-
-  .icon-wrap.success { background: rgba(52, 199, 119, 0.12); }
-  .icon-wrap.danger  { background: rgba(255, 77, 94, 0.12); }
-  .icon-wrap.warning { background: rgba(255, 176, 32, 0.12); }
-
-  .icon {
-    width: 34px;
-    height: 34px;
-  }
-
+  .icon-wrap.success { background: rgba(52,199,119,.12); }
+  .icon-wrap.danger, .icon-wrap.error { background: rgba(255,77,94,.12); }
+  .icon-wrap.warning { background: rgba(255,176,32,.12); }
+  .icon { width: 34px; height: 34px; }
   .icon-wrap.success .icon { color: var(--success); }
-  .icon-wrap.danger  .icon { color: var(--danger); }
+  .icon-wrap.danger .icon, .icon-wrap.error .icon { color: var(--danger); }
   .icon-wrap.warning .icon { color: var(--warning); }
-  .icon-wrap.error   .icon { color: var(--danger); }
-
   .spinner {
-    width: 34px;
-    height: 34px;
-    border: 3px solid rgba(79, 140, 255, 0.25);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
+    width: 34px; height: 34px; border: 3px solid rgba(79,140,255,.25);
+    border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite;
   }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-
-  h2 {
-    margin: 0 0 8px;
-    font-size: 19px;
-    font-weight: 600;
-  }
-
-  p.desc {
-    margin: 0;
-    font-size: 14px;
-    color: var(--muted);
-    line-height: 1.5;
-  }
-
-  .badge {
-    display: inline-block;
-    margin-top: 16px;
-    padding: 6px 14px;
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.3px;
-  }
-
-  .badge.danger {
-    background: rgba(255, 77, 94, 0.15);
-    color: var(--danger);
-  }
-
-  .badge.warning {
-    background: rgba(255, 176, 32, 0.15);
-    color: var(--warning);
-  }
-
+  @keyframes spin { to { transform: rotate(360deg); } }
+  h2 { margin: 0 0 8px; font-size: 19px; font-weight: 600; }
+  p.desc { margin: 0; font-size: 14px; color: var(--muted); line-height: 1.5; }
+  .badge { display: inline-block; margin-top: 16px; padding: 6px 14px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .badge.danger { background: rgba(255,77,94,.15); color: var(--danger); }
+  .badge.warning { background: rgba(255,176,32,.15); color: var(--warning); }
   .retry-btn {
-    margin-top: 20px;
-    background: var(--accent);
-    color: #fff;
-    border: none;
-    padding: 11px 22px;
-    border-radius: 12px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    display: none;
+    margin-top: 20px; background: var(--accent); color: #fff; border: none; padding: 11px 22px;
+    border-radius: 12px; font-size: 14px; font-weight: 600; cursor: pointer; display: none;
   }
 
-  .retry-btn:active {
-    opacity: 0.85;
+  /* ---------- App ---------- */
+  #app { display: none; width: 100%; max-width: 380px; padding-bottom: 84px; align-self: flex-start; }
+  .tab { display: none; }
+  .balance-card, .ad-card {
+    background: var(--card-bg); border: 1px solid var(--border); border-radius: 18px; text-align: center;
   }
-
-
-  /* ---------- Earn screen (shown after verification) ---------- */
-
-  #app {
-    display: none;
-    width: 100%;
-    max-width: 380px;
-  }
-
-  .balance-card {
-    background: var(--card-bg);
-    border: 1px solid var(--border);
-    border-radius: 18px;
-    padding: 24px;
-    text-align: center;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.35);
-  }
-
-  .balance-label {
-    font-size: 13px;
-    color: var(--muted);
-  }
-
-  .balance-amount {
-    margin: 6px 0 14px;
-    font-size: 40px;
-    font-weight: 700;
-  }
-
-  .balance-split {
-    display: flex;
-    gap: 8px;
-  }
-
+  .balance-card { padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+  .ad-card { margin-top: 14px; padding: 20px 24px; }
+  .tab > :first-child { margin-top: 0; }
+  .balance-label { font-size: 13px; color: var(--muted); }
+  .balance-amount { margin: 6px 0 4px; font-size: 38px; font-weight: 700; }
+  .balance-sub { margin-bottom: 14px; font-size: 14px; color: var(--success); font-weight: 600; }
+  .balance-split { display: flex; gap: 8px; }
   .balance-split div {
-    flex: 1;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 10px 6px;
-    font-size: 12px;
-    color: var(--muted);
+    flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+    padding: 10px 6px; font-size: 12px; color: var(--muted);
   }
-
-  .balance-split b {
-    display: block;
-    margin-top: 2px;
-    font-size: 15px;
-    color: var(--text);
-  }
-
-  .ad-card {
-    margin-top: 14px;
-    background: var(--card-bg);
-    border: 1px solid var(--border);
-    border-radius: 18px;
-    padding: 20px 24px;
-    text-align: center;
-  }
-
-  .ad-card h3 {
-    margin: 0 0 4px;
-    font-size: 16px;
-  }
-
-  .ad-count {
-    margin: 0 0 14px;
-    font-size: 13px;
-    color: var(--muted);
-  }
-
+  .balance-split b { display: block; margin-top: 2px; font-size: 15px; color: var(--text); }
+  .ad-card h3 { margin: 0 0 4px; font-size: 16px; }
+  .ad-count { margin: 0 0 14px; font-size: 13px; color: var(--muted); line-height: 1.5; }
   .ad-btn {
-    width: 100%;
-    background: var(--accent);
-    color: #fff;
-    border: none;
-    padding: 13px 22px;
-    border-radius: 12px;
-    font-size: 15px;
-    font-weight: 600;
-    cursor: pointer;
+    width: 100%; background: var(--accent); color: #fff; border: none; padding: 13px 22px;
+    border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer;
   }
-
-  .ad-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .ad-msg {
-    min-height: 18px;
-    margin: 12px 0 0;
-    font-size: 13px;
-    color: var(--muted);
-  }
-
-  .ad-msg.ok  { color: var(--success); }
+  .ad-btn:disabled { opacity: .5; cursor: not-allowed; }
+  .ad-msg { min-height: 18px; margin: 12px 0 0; font-size: 13px; color: var(--muted); word-break: break-word; }
+  .ad-msg.ok { color: var(--success); }
   .ad-msg.bad { color: var(--danger); }
 
-
-  /* ---------- Tabs + bottom nav ---------- */
-
-  #app { padding-bottom: 84px; }
-
-  .tab { display: none; }
-
-  .tab .ad-card:first-child { margin-top: 0; }
-
   .nav {
-    position: fixed;
-    left: 0; right: 0; bottom: 0;
-    display: flex;
-    background: var(--card-bg);
-    border-top: 1px solid var(--border);
-    padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+    position: fixed; left: 0; right: 0; bottom: 0; display: flex; background: var(--card-bg);
+    border-top: 1px solid var(--border); padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
   }
-
-  .nav button {
-    flex: 1;
-    background: none;
-    border: none;
-    color: var(--muted);
-    font-size: 12px;
-    font-weight: 600;
-    padding: 8px 2px;
-    cursor: pointer;
-  }
-
+  .nav button { flex: 1; background: none; border: none; color: var(--muted); font-size: 12px; font-weight: 600; padding: 8px 2px; cursor: pointer; }
   .nav button.active { color: var(--accent); }
 
   .row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--border);
-    font-size: 13px;
-    text-align: left;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0;
+    border-bottom: 1px solid var(--border); font-size: 13px; text-align: left;
   }
-
   .row:last-child { border-bottom: none; }
-
   .inp {
-    width: 100%;
-    margin: 6px 0;
-    padding: 11px 12px;
-    background: var(--bg);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    font-size: 14px;
+    width: 100%; margin: 6px 0; padding: 11px 12px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 10px; font-size: 14px;
   }
-
   .inp.small { width: 90px; margin: 0; padding: 7px 8px; }
-
-  .mini {
-    background: var(--accent);
-    color: #fff;
-    border: none;
-    border-radius: 8px;
-    padding: 7px 10px;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-  }
-
+  .mini { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 7px 10px; font-size: 12px; font-weight: 600; cursor: pointer; }
   .mini.red { background: var(--danger); }
-
-  .link-box {
-    word-break: break-all;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 10px;
-    font-size: 12px;
-    margin-bottom: 12px;
-  }
-
+  .mini.green { background: var(--success); }
+  .mini:disabled { opacity: .5; }
+  .link-box { word-break: break-all; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 10px; font-size: 12px; margin-bottom: 12px; }
   .btn-row { display: flex; gap: 8px; }
-  .btn-row .ad-btn { flex: 1; }
-
-  .st.pending { color: var(--warning); }
+  .btn-row .ad-btn, .btn-row .mini { flex: 1; }
+  .st.pending, .st.processing { color: var(--warning); }
   .st.paid { color: var(--success); }
-  .st.rejected { color: var(--danger); }
-
-  .wd-item {
-    text-align: left;
-    font-size: 13px;
-    padding: 10px 0;
-    border-bottom: 1px solid var(--border);
-  }
-
+  .st.rejected, .st.failed { color: var(--danger); }
+  .wd-item { text-align: left; font-size: 13px; padding: 10px 0; border-bottom: 1px solid var(--border); word-break: break-all; }
+  .wd-item .btn-row { margin-top: 8px; }
+  .note { font-size: 12px; color: var(--warning); margin: 0 0 8px; text-align: left; line-height: 1.4; }
 </style>
-
 </head>
 
 <body>
 
 <div class="card">
-
   <div class="icon-wrap" id="iconWrap">
     <div class="spinner" id="spinner"></div>
     <div class="icon" id="icon" style="display:none;"></div>
   </div>
-
-  <h2 id="title">መለያዎን በማረጋገጥ ላይ</h2>
-  <p class="desc" id="desc">እባክዎ ትንሽ ይጠብቁ...</p>
-
+  <h2 id="title">Verifying your account</h2>
+  <p class="desc" id="desc">Please wait a moment...</p>
   <span class="badge" id="badge" style="display:none;"></span>
-
-  <button class="retry-btn" id="retryBtn">እንደገና ሞክር</button>
-
+  <button class="retry-btn" id="retryBtn">Try again</button>
 </div>
 
 <div id="app">
 
   <div class="tab" id="tab-home">
-
     <div class="balance-card">
-      <div class="balance-label">ጠቅላላ ቀሪ ሂሳብ</div>
-      <div class="balance-amount"><span id="balTotal">0</span> ሳንቲም</div>
+      <div class="balance-label">Total balance</div>
+      <div class="balance-amount"><span id="balTotal">0</span> coins</div>
+      <div class="balance-sub">≈ <span id="balUsdt">0</span> USDT</div>
       <div class="balance-split">
-        <div>ማስታወቂያ<b id="balAds">0</b></div>
-        <div>ግብዣ<b id="balInvite">0</b></div>
-        <div>ተግባር<b id="balTasks">0</b></div>
+        <div>Ads<b id="balAds">0</b></div>
+        <div>Invites<b id="balInvite">0</b></div>
+        <div>Tasks<b id="balTasks">0</b></div>
       </div>
     </div>
-
     <div class="ad-card">
-      <h3>እንኳን ደህና መጡ!</h3>
-      <p class="ad-count" style="margin:0">ሳንቲም ለማግኘት «ማግኛ» ን ይጫኑ፤ ጓደኞችን በመጋበዝም ተጨማሪ ያግኙ።</p>
+      <h3>Welcome!</h3>
+      <p class="ad-count" style="margin:0">Watch ads in Earn and invite friends to collect coins. Withdraw in USDT from Wallet.</p>
     </div>
-
   </div>
 
   <div class="tab" id="tab-earn">
-
     <div class="ad-card">
-      <h3>ማስታወቂያ ይመልከቱ</h3>
-      <p class="ad-count" id="adCount">በመጫን ላይ...</p>
-      <button class="ad-btn" id="adBtn" disabled>ማስታወቂያ ይመልከቱ</button>
+      <h3>Watch ads</h3>
+      <p class="ad-count" id="adCount">Loading...</p>
+      <button class="ad-btn" id="adBtn" disabled>Watch ad</button>
       <p class="ad-msg" id="adMsg"></p>
     </div>
-
   </div>
 
   <div class="tab" id="tab-invite">
-
     <div class="ad-card">
-      <h3>ጓደኞችን ይጋብዙ</h3>
-      <p class="ad-count">ለእያንዳንዱ የተረጋገጠ ጓደኛ <b id="invReward">0</b> ሳንቲም ያገኛሉ።</p>
+      <h3>Invite friends</h3>
+      <p class="ad-count">Earn <b id="invReward">0</b> coins when your friend joins and watches their first ad.</p>
       <div class="link-box" id="invLink">...</div>
       <div class="btn-row">
-        <button class="ad-btn" id="invCopy">ቅዳ</button>
-        <button class="ad-btn" id="invShare">አጋራ</button>
+        <button class="ad-btn" id="invCopy">Copy</button>
+        <button class="ad-btn" id="invShare">Share</button>
       </div>
       <p class="ad-msg" id="invMsg"></p>
     </div>
-
     <div class="ad-card">
-      <div class="row"><span>የተጋበዙ ጓደኞች</span><b id="invTotal">0</b></div>
-      <div class="row"><span>የተረጋገጡ (ክፍያ የተከፈለባቸው)</span><b id="invDone">0</b></div>
+      <div class="row"><span>Friends invited</span><b id="invTotal">0</b></div>
+      <div class="row"><span>Rewarded</span><b id="invDone">0</b></div>
     </div>
-
   </div>
 
   <div class="tab" id="tab-wallet">
-
     <div class="balance-card">
-      <div class="balance-label">ማውጣት የሚችሉት</div>
-      <div class="balance-amount"><span id="walBirr">0</span> ብር</div>
-      <div class="balance-label"><span id="walCoins">0</span> ሳንቲም · ዝቅተኛ ማውጫ <span id="walMin">0</span> ብር</div>
+      <div class="balance-label">Available to withdraw</div>
+      <div class="balance-amount"><span id="walUsdt">0</span> USDT</div>
+      <div class="balance-label"><span id="walCoins">0</span> coins · min <span id="walMin">0</span> USDT · fee <span id="walFee">0</span> USDT</div>
     </div>
-
     <div class="ad-card">
-      <h3>ገንዘብ አውጣ</h3>
-      <select class="inp" id="walMethod">
-        <option value="telebirr">ቴሌብር</option>
-        <option value="cbe">የኢትዮጵያ ንግድ ባንክ (CBE)</option>
-      </select>
-      <input class="inp" id="walAccount" inputmode="numeric" placeholder="ስልክ ቁጥር (09...) ወይም የአካውንት ቁጥር">
-      <input class="inp" id="walName" placeholder="የአካውንት ባለቤት ሙሉ ስም">
-      <button class="ad-btn" id="walBtn">ጥያቄ ላክ</button>
+      <h3>Withdraw USDT (BEP20)</h3>
+      <p class="note">Network: BNB Smart Chain (BEP20) only. Sending to a wallet on another network means lost funds.</p>
+      <input class="inp" id="walAddress" placeholder="Your BEP20 address (0x...)" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button class="ad-btn" id="walBtn">Request withdrawal</button>
       <p class="ad-msg" id="walMsg"></p>
     </div>
-
     <div class="ad-card">
-      <h3>የቅርብ ጊዜ ጥያቄዎች</h3>
+      <h3>Recent withdrawals</h3>
       <div id="walHistory"></div>
     </div>
-
   </div>
 
   <div class="tab" id="tab-admin">
-
     <div class="ad-card">
-      <h3>አጠቃላይ መረጃ</h3>
-      <div class="row"><span>ተጠቃሚዎች</span><b id="admUsers">0</b></div>
-      <div class="row"><span>የታገዱ</span><b id="admBanned">0</b></div>
-      <div class="row"><span>የሚጠባበቁ የማውጫ ጥያቄዎች</span><b id="admPending">0</b></div>
-      <div class="row"><span>ጠቅላላ ሳንቲም</span><b id="admCoins">0</b></div>
+      <h3>Overview</h3>
+      <div class="row"><span>Users</span><b id="admUsers">0</b></div>
+      <div class="row"><span>Banned</span><b id="admBanned">0</b></div>
+      <div class="row"><span>Total coins held</span><b id="admCoins">0</b></div>
+      <div class="row"><span>Total paid (USDT)</span><b id="admPaid">0</b></div>
+      <div class="row"><span>Payout wallet</span><b id="admWallet">-</b></div>
     </div>
-
     <div class="ad-card">
-      <h3>ቅንብሮች</h3>
+      <h3>Withdrawal requests</h3>
+      <div id="admWd"></div>
+      <p class="ad-msg" id="admMsg"></p>
+    </div>
+    <div class="ad-card">
+      <h3>Settings</h3>
       <div id="admSettings"></div>
     </div>
-
     <div class="ad-card">
-      <h3>የማውጫ ጥያቄዎች</h3>
-      <div id="admWd"></div>
+      <h3>Ban / unban user</h3>
+      <input class="inp" id="banId" inputmode="numeric" placeholder="Telegram user ID">
+      <div class="btn-row">
+        <button class="mini red" id="banBtn">Ban</button>
+        <button class="mini green" id="unbanBtn">Unban</button>
+      </div>
     </div>
-
   </div>
 
   <div class="nav" id="nav">
-    <button data-tab="home" class="active">መነሻ</button>
-    <button data-tab="earn">ማግኛ</button>
-    <button data-tab="invite">ጋብዝ</button>
-    <button data-tab="wallet">ቦርሳ</button>
-    <button data-tab="admin" id="navAdmin" style="display:none;">አድሚን</button>
+    <button data-tab="home" class="active">Home</button>
+    <button data-tab="earn">Earn</button>
+    <button data-tab="invite">Invite</button>
+    <button data-tab="wallet">Wallet</button>
+    <button data-tab="admin" id="navAdmin" style="display:none;">Admin</button>
   </div>
 
 </div>
 
 <script>
+const tg = (window.Telegram && window.Telegram.WebApp) || null;
+if (tg) { tg.ready(); tg.expand(); }
 
-const hasTelegram =
-  typeof window.Telegram !== 'undefined' &&
-  window.Telegram.WebApp;
-
-const tg = hasTelegram ? window.Telegram.WebApp : null;
-
-if (tg) {
-  tg.ready();
-  tg.expand();
-}
-
-/*
-=========================================================
-BACKEND BASE URL
-(frontend is on GitHub Pages, backend is on Vercel —
-must use an absolute URL, a relative path would hit
-GitHub Pages instead of the server)
-=========================================================
-*/
-
+// Backend (Vercel). Must be an absolute URL because this page is on GitHub Pages.
 const API_BASE = 'https://backend-rho-tan-62.vercel.app';
 
-/*
-=========================================================
-ICONS (one clearly distinct shape per state — no emoji)
-=========================================================
-*/
-
-const ICONS = {
-
-  // Shield with an X — VPN / proxy / general ban
-  shield: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="M9.5 9.5l5 5M14.5 9.5l-5 5"/></svg>`,
-
-  // Two overlapping people — multiple accounts
-  users: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
-
-  // Check circle — success
-  check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>`,
-
-  // Triangle with exclamation — warning (open in Telegram)
-  warning: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m10.29 3.86-8.18 14.14A1.5 1.5 0 0 0 3.4 20.5h17.2a1.5 1.5 0 0 0 1.3-2.5L13.71 3.86a1.5 1.5 0 0 0-2.42 0Z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>`,
-
-  // X circle — generic verification failure
-  xCircle: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6M9 9l6 6"/></svg>`,
-
-  // Wi-Fi off — connection / timeout errors
-  wifiOff: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" x2="22" y1="2" y2="22"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 4.17-2.65"/><path d="M10.66 5c4.01-.36 8.14.9 11.34 3.76"/><path d="M16.85 11.25a10 10 0 0 1 2.22 1.68"/><path d="M5 13a10 10 0 0 1 5.24-2.76"/><line x1="12" x2="12.01" y1="20" y2="20"/></svg>`
-};
-
-const els = {
-  iconWrap: document.getElementById('iconWrap'),
-  spinner: document.getElementById('spinner'),
-  icon: document.getElementById('icon'),
-  title: document.getElementById('title'),
-  desc: document.getElementById('desc'),
-  badge: document.getElementById('badge'),
-  retryBtn: document.getElementById('retryBtn')
-};
-
-/*
-=========================================================
-UI STATE HELPERS
-=========================================================
-*/
-
-function setState(type, { icon, title, desc, badge } = {}) {
-
-  els.spinner.style.display = (type === 'loading') ? 'block' : 'none';
-  els.icon.style.display = (type === 'loading') ? 'none' : 'block';
-
-  els.iconWrap.className = 'icon-wrap' + (type !== 'loading' ? ' ' + type : '');
-
-  if (icon) els.icon.innerHTML = ICONS[icon] || '';
-  if (title) els.title.textContent = title;
-  if (desc) els.desc.textContent = desc;
-
-  if (badge) {
-    els.badge.textContent = badge;
-    els.badge.className = 'badge ' + (type === 'success' ? 'success' : type);
-    els.badge.style.display = 'inline-block';
-  } else {
-    els.badge.style.display = 'none';
-  }
-
-  els.retryBtn.style.display = (type === 'error') ? 'inline-block' : 'none';
-}
-
-/*
-=========================================================
-DEVICE INSTALLATION ID
-=========================================================
-*/
-
-let deviceId = localStorage.getItem('device_installation_id');
-
-if (!deviceId) {
-  deviceId = crypto.randomUUID();
-  localStorage.setItem('device_installation_id', deviceId);
-}
-
-/*
-=========================================================
-BAN REASON TEXT (matches backend ban_reason / getBanType logic)
-=========================================================
-*/
-
-function describeBan(reason) {
-
-  const r = String(reason || '').toLowerCase();
-
-  if (r.includes('vpn') || r.includes('proxy') || r.includes('tor')) {
-    return {
-      icon: 'shield',
-      title: 'መዳረሻ ታግዷል',
-      desc: 'ቪፒኤን ወይም ፕሮክሲ ተገኝቷል። እባክዎ ያጥፉት እና መደበኛ ኔትወርክ ይጠቀሙ።',
-      badge: 'ቪፒኤን / ፕሮክሲ ተገኝቷል'
-    };
-  }
-
-  if (r.includes('multiple') || r.includes('same device') || r.includes('same ip')) {
-    return {
-      icon: 'users',
-      title: 'መዳረሻ ታግዷል',
-      desc: 'ከዚህ መሳሪያ ወይም ኔትወርክ ብዙ የቴሌግራም አካውንቶች ተገኝተዋል። አንድ አካውንት ብቻ ይፈቀዳል።',
-      badge: 'ብዙ አካውንቶች ተገኝተዋል'
-    };
-  }
-
-  return {
-    icon: 'shield',
-    title: 'አካውንት ታግዷል',
-    desc: 'አካውንትዎ ከአዴዋ ለዘላለም ታግዷል።',
-    badge: 'ታግዷል'
-  };
-}
-
-/*
-=========================================================
-FETCH WITH TIMEOUT (fixes the "stuck on Checking..." issue)
-=========================================================
-*/
-
-function fetchWithTimeout(url, options, timeoutMs) {
-
-  const controller = new AbortController();
-
-  const timer = setTimeout(
-    () => controller.abort(),
-    timeoutMs
-  );
-
-  return fetch(url, { ...options, signal: controller.signal })
-    .finally(() => clearTimeout(timer));
-}
-
-/*
-=========================================================
-AUTHENTICATE
-=========================================================
-*/
-
-async function authenticate() {
-
-  setState('loading', {
-    title: 'መለያዎን በማረጋገጥ ላይ',
-    desc: 'እባክዎ ትንሽ ይጠብቁ...'
-  });
-
-  if (!hasTelegram) {
-
-    setState('warning', {
-      icon: 'warning',
-      title: 'በቴሌግራም ይክፈቱ',
-      desc: 'ይህ ገጽ እንደ ቴሌግራም ሚኒ አፕ መከፈት አለበት፤ በተለመደው ብሮውዘር አይሰራም።'
-    });
-
-    return;
-  }
-
-  const initData = tg.initData;
-
-  if (!initData) {
-
-    setState('warning', {
-      icon: 'warning',
-      title: 'በቴሌግራም ይክፈቱ',
-      desc: 'ይህ አፕ ከቴሌግራም ውስጥ መከፈት አለበት።',
-    });
-
-    return;
-  }
-
-  try {
-
-    const response = await fetchWithTimeout(
-      API_BASE + '/api/auth',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-init-data': initData,
-          'x-device': deviceId
-        }
-      },
-      15000 // 15s timeout instead of hanging forever
-    );
-
-    const data = await response.json();
-
-    // ---------------------------------------------------
-    // BANNED (backend returns status: 'banned', reason: "...")
-    // ---------------------------------------------------
-
-    if (data.status === 'banned') {
-
-      const info = describeBan(data.reason);
-
-      setState('danger', info);
-
-      return;
-    }
-
-    // ---------------------------------------------------
-    // VERIFIED / SUCCESS
-    // ---------------------------------------------------
-
-    if (data.ok && data.status === 'verified') {
-
-      setState('success', {
-        icon: 'check',
-        title: 'ተረጋግጧል',
-        desc: 'የደህንነት ማረጋገጫ በተሳካ ሁኔታ ተጠናቋል።'
-      });
-
-      setTimeout(() => {
-        showApp();
-      }, 800);
-
-      return;
-    }
-
-    // ---------------------------------------------------
-    // INVALID / OTHER ERROR FROM SERVER
-    // ---------------------------------------------------
-
-    setState('error', {
-      icon: 'xCircle',
-      title: 'ማረጋገጥ አልተሳካም',
-      desc: data.message || 'የሆነ ችግር ተፈጥሯል። እባክዎ እንደገና ይሞክሩ።'
-    });
-
-  } catch (error) {
-
-    console.error(error);
-
-    const timedOut = (error.name === 'AbortError');
-
-    setState('error', {
-      icon: 'wifiOff',
-      title: timedOut ? 'ግንኙነቱ ጊዜው አልፏል' : 'የግንኙነት ስህተት',
-      desc: error.name + ': ' + error.message + ' | ' + API_BASE
-    });
-  }
-}
-
-/*
-=========================================================
-EARN: BALANCE + WATCH ADS
-=========================================================
-*/
-
 const ADSGRAM_BLOCK_ID = '50476';
-
-// Monetag fallback: put the name of the Monetag SDK show-function here
-// (the one from your Monetag zone script). Leave empty to disable.
+// Monetag fallback: name of the SDK show-function (e.g. 'show_1234567'). Empty = disabled.
 const MONETAG_FN = '';
-
-const earn = {
-  state: null,
-  busy: false,
-  timer: null
-};
-
-const adEls = {
-  app: document.getElementById('app'),
-  total: document.getElementById('balTotal'),
-  ads: document.getElementById('balAds'),
-  invite: document.getElementById('balInvite'),
-  tasks: document.getElementById('balTasks'),
-  count: document.getElementById('adCount'),
-  btn: document.getElementById('adBtn'),
-  msg: document.getElementById('adMsg')
-};
-
-async function api(path) {
-  const response = await fetchWithTimeout(
-    API_BASE + path,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-init-data': tg.initData,
-        'x-device': deviceId
-      },
-      body: JSON.stringify(arguments[1] || {})
-    },
-    15000
-  );
-  return response.json();
-}
-
-function setAdMsg(text, type) {
-  adEls.msg.textContent = text || '';
-  adEls.msg.className = 'ad-msg' + (type ? ' ' + type : '');
-}
-
-function renderEarn() {
-
-  const s = earn.state;
-  if (!s) return;
-
-  adEls.total.textContent = s.coins.toLocaleString();
-  adEls.ads.textContent = s.ads_coins.toLocaleString();
-  adEls.invite.textContent = s.invite_coins.toLocaleString();
-  adEls.tasks.textContent = s.task_coins.toLocaleString();
-
-  adEls.count.textContent =
-    s.ads_today + ' / ' + s.daily_ad_limit +
-    ' ማስታወቂያ ዛሬ  ·  +' + s.coins_per_ad + ' ሳንቲም በእያንዳንዱ';
-
-  clearInterval(earn.timer);
-
-  const limitReached = s.ads_today >= s.daily_ad_limit;
-
-  if (limitReached) {
-    adEls.btn.disabled = true;
-    adEls.btn.textContent = 'የዛሬ ገደብ ተሞልቷል';
-    return;
-  }
-
-  if (s.cooldown_left > 0) {
-
-    let left = s.cooldown_left;
-    adEls.btn.disabled = true;
-    adEls.btn.textContent = 'ቀጣይ ማስታወቂያ በ ' + left + 's';
-
-    earn.timer = setInterval(() => {
-      left--;
-      if (left <= 0) {
-        clearInterval(earn.timer);
-        s.cooldown_left = 0;
-        renderEarn();
-        return;
-      }
-      adEls.btn.textContent = 'ቀጣይ ማስታወቂያ በ ' + left + 's';
-    }, 1000);
-
-    return;
-  }
-
-  adEls.btn.disabled = earn.busy;
-  adEls.btn.textContent = 'ማስታወቂያ ይመልከቱ';
-}
-
-async function showApp() {
-
-  document.querySelector('.card').style.display = 'none';
-  adEls.app.style.display = 'block';
-
-  try {
-    const data = await api('/api/me');
-    if (data.ok) {
-      earn.state = data.state;
-      renderEarn();
-      if (data.is_admin) document.getElementById('navAdmin').style.display = '';
-      showTab('home');
-    } else {
-      adEls.count.textContent = data.message || 'ቀሪ ሂሳብ መጫን አልተቻለም።';
-    }
-  } catch (e) {
-    adEls.count.textContent = 'ሰርቨሩን ማግኘት አልተቻለም።';
-  }
-}
-
-// Decides at click time which network is ready (AdsGram first, Monetag next)
-async function showAdWaterfall() {
-
-  // 1) AdsGram
-  try {
-    if (window.Adsgram) {
-      const controller = window.Adsgram.init({ blockId: ADSGRAM_BLOCK_ID });
-      const result = await controller.show();
-      return { done: result && result.done === true, provider: 'adsgram' };
-    }
-  } catch (e) {
-    // no fill / error -> try the next network
-  }
-
-  // 2) Monetag
-  try {
-    if (MONETAG_FN && typeof window[MONETAG_FN] === 'function') {
-      await window[MONETAG_FN]();
-      return { done: true, provider: 'monetag' };
-    }
-  } catch (e) {
-    // no fill / error
-  }
-
-  return { done: false, provider: '', unavailable: true };
-}
-
-async function watchAd() {
-
-  if (earn.busy) return;
-
-  earn.busy = true;
-  adEls.btn.disabled = true;
-  setAdMsg('');
-
-  try {
-
-    const start = await api('/api/ads/start');
-
-    if (!start.ok) {
-      if (start.state) earn.state = start.state;
-      setAdMsg(start.message || 'ማስታወቂያ መጀመር አልተቻለም።', 'bad');
-      return;
-    }
-
-    const ad = await showAdWaterfall();
-
-    if (ad.unavailable) {
-      setAdMsg('አሁን ማስታወቂያ የለም። ትንሽ ቆይተው ይሞክሩ።', 'bad');
-      return;
-    }
-
-    if (!ad.done) {
-      setAdMsg('ሽልማቱን ለማግኘት ማስታወቂያውን ሙሉ ይመልከቱ።', 'bad');
-      return;
-    }
-
-    const claim = await api('/api/ads/claim', {
-      token: start.token,
-      provider: ad.provider
-    });
-
-    if (claim.ok) {
-      earn.state = claim.state;
-      setAdMsg('+' + claim.reward + ' ሳንቲም ተጨምሯል', 'ok');
-    } else {
-      setAdMsg(claim.message || 'ሽልማት አልተሰጠም።', 'bad');
-    }
-
-  } catch (e) {
-
-    console.error(e);
-    setAdMsg('የግንኙነት ስህተት። እንደገና ይሞክሩ።', 'bad');
-
-  } finally {
-
-    earn.busy = false;
-    renderEarn();
-  }
-}
-
-adEls.btn.addEventListener('click', watchAd);
-
-els.retryBtn.addEventListener('click', authenticate);
-
-
-/*
-=========================================================
-TABS: HOME / EARN / INVITE / WALLET / ADMIN
-=========================================================
-*/
 
 const $ = (id) => document.getElementById(id);
 
@@ -958,35 +247,250 @@ function el(tag, cls, text) {
   return e;
 }
 
+const fmt = (n) => parseFloat(Number(n).toFixed(6)).toString();
+
+/* ---------- Icons ---------- */
+const svg = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const ICONS = {
+  shield: svg('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="M9.5 9.5l5 5M14.5 9.5l-5 5"/>'),
+  users: svg('<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'),
+  check: svg('<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>'),
+  warning: svg('<path d="m10.29 3.86-8.18 14.14A1.5 1.5 0 0 0 3.4 20.5h17.2a1.5 1.5 0 0 0 1.3-2.5L13.71 3.86a1.5 1.5 0 0 0-2.42 0Z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/>'),
+  xCircle: svg('<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6M9 9l6 6"/>'),
+  wifiOff: svg('<line x1="2" x2="22" y1="2" y2="22"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 4.17-2.65"/><path d="M10.66 5c4.01-.36 8.14.9 11.34 3.76"/><path d="M16.85 11.25a10 10 0 0 1 2.22 1.68"/><path d="M5 13a10 10 0 0 1 5.24-2.76"/><line x1="12" x2="12.01" y1="20" y2="20"/>')
+};
+
+/* ---------- Verification card ---------- */
+const els = {
+  iconWrap: $('iconWrap'), spinner: $('spinner'), icon: $('icon'),
+  title: $('title'), desc: $('desc'), badge: $('badge'), retryBtn: $('retryBtn')
+};
+
+function setState(type, { icon, title, desc, badge } = {}) {
+  els.spinner.style.display = type === 'loading' ? 'block' : 'none';
+  els.icon.style.display = type === 'loading' ? 'none' : 'block';
+  els.iconWrap.className = 'icon-wrap' + (type !== 'loading' ? ' ' + type : '');
+  if (icon) els.icon.innerHTML = ICONS[icon] || '';
+  if (title) els.title.textContent = title;
+  if (desc) els.desc.textContent = desc;
+  if (badge) {
+    els.badge.textContent = badge;
+    els.badge.className = 'badge ' + type;
+    els.badge.style.display = 'inline-block';
+  } else {
+    els.badge.style.display = 'none';
+  }
+  els.retryBtn.style.display = type === 'error' ? 'inline-block' : 'none';
+}
+
+let deviceId = localStorage.getItem('device_installation_id');
+if (!deviceId) {
+  deviceId = crypto.randomUUID();
+  localStorage.setItem('device_installation_id', deviceId);
+}
+
+function describeBan(reason) {
+  const r = String(reason || '').toLowerCase();
+  if (r.includes('vpn') || r.includes('proxy') || r.includes('tor')) {
+    return { icon: 'shield', title: 'Access blocked', desc: 'A VPN or proxy was detected. Turn it off and use a normal network.', badge: 'VPN / proxy detected' };
+  }
+  if (r.includes('multiple') || r.includes('same device') || r.includes('same ip')) {
+    return { icon: 'users', title: 'Access blocked', desc: 'Multiple Telegram accounts were detected on this device or network. Only one account is allowed.', badge: 'Multiple accounts detected' };
+  }
+  return { icon: 'shield', title: 'Account banned', desc: 'Your account has been permanently banned from Adewa.', badge: 'Banned' };
+}
+
+function fetchWithTimeout(url, options, ms) {
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), ms);
+  return fetch(url, { ...options, signal: c.signal }).finally(() => clearTimeout(t));
+}
+
+async function api(path, body) {
+  const r = await fetchWithTimeout(API_BASE + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-init-data': tg ? tg.initData : '', 'x-device': deviceId },
+    body: JSON.stringify(body || {})
+  }, 30000);
+  return r.json();
+}
+
+async function authenticate() {
+  setState('loading', { title: 'Verifying your account', desc: 'Please wait a moment...' });
+
+  if (!tg || !tg.initData) {
+    setState('warning', { icon: 'warning', title: 'Open in Telegram', desc: 'This app must be opened from inside Telegram.' });
+    return;
+  }
+
+  try {
+    const data = await api('/api/auth');
+
+    if (data.status === 'banned') { setState('danger', describeBan(data.reason)); return; }
+
+    if (data.ok && data.status === 'verified') {
+      setState('success', { icon: 'check', title: 'Verified', desc: 'Security check completed successfully.' });
+      setTimeout(showApp, 800);
+      return;
+    }
+
+    setState('error', { icon: 'xCircle', title: 'Verification failed', desc: data.message || 'Something went wrong. Please try again.' });
+  } catch (e) {
+    console.error(e);
+    setState('error', {
+      icon: 'wifiOff',
+      title: e.name === 'AbortError' ? 'Connection timed out' : 'Connection error',
+      desc: 'Could not reach the server. Check your connection and try again.'
+    });
+  }
+}
+
+els.retryBtn.addEventListener('click', authenticate);
+
+/* ---------- Earn ---------- */
+const earn = { state: null, busy: false, timer: null, rate: 10000 };
+
+function setAdMsg(text, type) {
+  $('adMsg').textContent = text || '';
+  $('adMsg').className = 'ad-msg' + (type ? ' ' + type : '');
+}
+
+function renderEarn() {
+  const s = earn.state;
+  if (!s) return;
+
+  $('balTotal').textContent = s.coins.toLocaleString();
+  $('balUsdt').textContent = fmt(Math.floor((s.coins * 1e6) / earn.rate) / 1e6);
+  $('balAds').textContent = s.ads_coins.toLocaleString();
+  $('balInvite').textContent = s.invite_coins.toLocaleString();
+  $('balTasks').textContent = s.task_coins.toLocaleString();
+
+  $('adCount').textContent = `${s.ads_today} / ${s.daily_ad_limit} ads today · +${s.coins_per_ad} coins each`;
+
+  const btn = $('adBtn');
+  clearInterval(earn.timer);
+
+  if (s.ads_today >= s.daily_ad_limit) {
+    btn.disabled = true;
+    btn.textContent = 'Daily limit reached';
+    return;
+  }
+
+  if (s.cooldown_left > 0) {
+    let left = s.cooldown_left;
+    btn.disabled = true;
+    btn.textContent = `Next ad in ${left}s`;
+    earn.timer = setInterval(() => {
+      left--;
+      if (left <= 0) { clearInterval(earn.timer); s.cooldown_left = 0; renderEarn(); return; }
+      btn.textContent = `Next ad in ${left}s`;
+    }, 1000);
+    return;
+  }
+
+  btn.disabled = earn.busy;
+  btn.textContent = 'Watch ad';
+}
+
+async function refreshMe() {
+  const d = await api('/api/me');
+  if (d.ok) {
+    earn.state = d.state;
+    earn.rate = d.coins_per_usdt || earn.rate;
+    renderEarn();
+  }
+  return d;
+}
+
+async function showApp() {
+  document.querySelector('.card').style.display = 'none';
+  $('app').style.display = 'block';
+  document.body.style.alignItems = 'flex-start';
+
+  try {
+    const d = await refreshMe();
+    if (d.ok && d.is_admin) $('navAdmin').style.display = '';
+    if (!d.ok) $('adCount').textContent = d.message || 'Could not load your balance.';
+  } catch (e) {
+    $('adCount').textContent = 'Could not reach the server.';
+  }
+
+  showTab('home');
+}
+
+// AdsGram first, Monetag as fallback
+async function showAdWaterfall() {
+  try {
+    if (window.Adsgram) {
+      const result = await window.Adsgram.init({ blockId: ADSGRAM_BLOCK_ID }).show();
+      return { done: !!(result && result.done), provider: 'adsgram' };
+    }
+  } catch (e) { /* no fill -> next network */ }
+
+  try {
+    if (MONETAG_FN && typeof window[MONETAG_FN] === 'function') {
+      await window[MONETAG_FN]();
+      return { done: true, provider: 'monetag' };
+    }
+  } catch (e) { /* no fill */ }
+
+  return { done: false, unavailable: true };
+}
+
+async function watchAd() {
+  if (earn.busy) return;
+
+  earn.busy = true;
+  $('adBtn').disabled = true;
+  setAdMsg('');
+
+  try {
+    const start = await api('/api/ads/start');
+
+    if (!start.ok) {
+      if (start.state) earn.state = start.state;
+      setAdMsg(start.message || 'Could not start the ad.', 'bad');
+      return;
+    }
+
+    const ad = await showAdWaterfall();
+
+    if (ad.unavailable) { setAdMsg('No ad available right now. Try again soon.', 'bad'); return; }
+    if (!ad.done) { setAdMsg('Watch the whole ad to get your reward.', 'bad'); return; }
+
+    const claim = await api('/api/ads/claim', { token: start.token, provider: ad.provider });
+
+    if (claim.ok) {
+      earn.state = claim.state;
+      setAdMsg(`+${claim.reward} coins added`, 'ok');
+    } else {
+      setAdMsg(claim.message || 'Reward was not granted.', 'bad');
+    }
+  } catch (e) {
+    console.error(e);
+    setAdMsg('Connection error. Please try again.', 'bad');
+  } finally {
+    earn.busy = false;
+    renderEarn();
+  }
+}
+
+$('adBtn').addEventListener('click', watchAd);
+
+/* ---------- Tabs ---------- */
 function showTab(name) {
+  document.querySelectorAll('.tab').forEach((t) => { t.style.display = t.id === 'tab-' + name ? 'block' : 'none'; });
+  document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
 
-  document.querySelectorAll('.tab').forEach((t) => {
-    t.style.display = (t.id === 'tab-' + name) ? 'block' : 'none';
-  });
-
-  document.querySelectorAll('#nav button').forEach((b) => {
-    b.classList.toggle('active', b.dataset.tab === name);
-  });
-
+  if (name === 'home' || name === 'earn') refreshMe().catch(() => {});
   if (name === 'invite') loadInvite();
   if (name === 'wallet') loadWallet();
   if (name === 'admin') loadAdmin();
 }
 
-document.querySelectorAll('#nav button').forEach((b) => {
-  b.addEventListener('click', () => showTab(b.dataset.tab));
-});
-
-async function refreshBalance() {
-  const d = await api('/api/me');
-  if (d.ok) {
-    earn.state = d.state;
-    renderEarn();
-  }
-}
+document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
 /* ---------- Invite ---------- */
-
 let inviteLink = '';
 
 async function loadInvite() {
@@ -999,14 +503,14 @@ async function loadInvite() {
     $('invDone').textContent = d.done;
     $('invReward').textContent = d.reward;
   } catch (e) {
-    $('invMsg').textContent = 'የግንኙነት ስህተት።';
+    $('invMsg').textContent = 'Connection error.';
   }
 }
 
 $('invCopy').addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(inviteLink);
-    $('invMsg').textContent = 'ተቀድቷል ✓';
+    $('invMsg').textContent = 'Copied ✓';
   } catch (e) {
     $('invMsg').textContent = inviteLink;
   }
@@ -1014,84 +518,175 @@ $('invCopy').addEventListener('click', async () => {
 
 $('invShare').addEventListener('click', () => {
   if (!inviteLink) return;
-  const url = 'https://t.me/share/url?url=' + encodeURIComponent(inviteLink) +
-    '&text=' + encodeURIComponent('አዴዋን ተቀላቀሉ እና ገንዘብ ያግኙ!');
-  tg.openTelegramLink(url);
+  tg.openTelegramLink('https://t.me/share/url?url=' + encodeURIComponent(inviteLink) +
+    '&text=' + encodeURIComponent('Join Adewa and earn USDT!'));
 });
 
 /* ---------- Wallet ---------- */
+const WD_STATUS = { pending: 'Pending', processing: 'Processing', paid: 'Paid', rejected: 'Rejected', failed: 'Failed' };
 
-const WD_STATUS = { pending: 'በመጠበቅ ላይ', paid: 'ተከፍሏል', rejected: 'ውድቅ' };
-const WD_METHOD = { telebirr: 'ቴሌብር', cbe: 'ንግድ ባንክ' };
+function openLink(url) { if (tg && tg.openLink) tg.openLink(url); else window.open(url, '_blank'); }
+
+function confirmBox(text) {
+  return new Promise((resolve) => {
+    if (tg && tg.showConfirm) tg.showConfirm(text, resolve);
+    else resolve(window.confirm(text));
+  });
+}
 
 async function loadWallet() {
   try {
     const d = await api('/api/wallet');
     if (!d.ok) return;
-    $('walBirr').textContent = d.birr;
+
+    $('walUsdt').textContent = fmt(d.usdt);
     $('walCoins').textContent = d.coins.toLocaleString();
-    $('walMin').textContent = d.min_birr;
+    $('walMin').textContent = fmt(d.min);
+    $('walFee').textContent = fmt(d.fee);
+
     const box = $('walHistory');
     box.textContent = '';
-    if (!d.history.length) box.appendChild(el('p', 'ad-count', 'ምንም ጥያቄ የለም።'));
+
+    if (!d.history.length) box.appendChild(el('p', 'ad-count', 'No withdrawals yet.'));
+
     d.history.forEach((w) => {
       const row = el('div', 'row');
-      row.appendChild(el('span', '', w.amount_birr + ' ብር · ' + (WD_METHOD[w.method] || w.method)));
-      row.appendChild(el('b', 'st ' + w.status, WD_STATUS[w.status] || w.status));
+      row.appendChild(el('span', '', `${fmt(w.net)} USDT`));
+
+      const right = el('span');
+      right.appendChild(el('b', 'st ' + w.status, WD_STATUS[w.status] || w.status));
+
+      if (w.tx_hash) {
+        const a = el('button', 'mini', 'View');
+        a.style.marginLeft = '8px';
+        a.addEventListener('click', () => openLink(d.explorer + w.tx_hash));
+        right.appendChild(a);
+      }
+
+      row.appendChild(right);
       box.appendChild(row);
     });
-  } catch (e) {}
+  } catch (e) { /* ignore */ }
 }
 
 $('walBtn').addEventListener('click', async () => {
   const msg = $('walMsg');
+  const address = $('walAddress').value.trim();
+
   msg.className = 'ad-msg';
   msg.textContent = '';
+
+  if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    msg.className = 'ad-msg bad';
+    msg.textContent = 'Enter a valid BEP20 address (0x...).';
+    return;
+  }
+
+  const ok = await confirmBox('Withdraw to this BEP20 address?\n\n' + address + '\n\nWrong addresses cannot be recovered.');
+  if (!ok) return;
+
   $('walBtn').disabled = true;
+
   try {
-    const d = await api('/api/withdraw', {
-      method: $('walMethod').value,
-      account: $('walAccount').value,
-      name: $('walName').value
-    });
+    const d = await api('/api/withdraw', { address });
+
     if (d.ok) {
       msg.className = 'ad-msg ok';
-      msg.textContent = 'ጥያቄዎ ተልኳል።';
-      await refreshBalance();
+      msg.textContent = `Request sent. You will receive ${fmt(d.net)} USDT after approval.`;
+      await refreshMe();
       loadWallet();
     } else {
       msg.className = 'ad-msg bad';
-      msg.textContent = d.message || 'አልተሳካም።';
+      msg.textContent = d.message || 'Request failed.';
     }
   } catch (e) {
     msg.className = 'ad-msg bad';
-    msg.textContent = 'የግንኙነት ስህተት።';
+    msg.textContent = 'Connection error.';
   } finally {
     $('walBtn').disabled = false;
   }
 });
 
 /* ---------- Admin ---------- */
-
 const SETTING_LABELS = {
-  coins_per_ad: 'ሳንቲም በአንድ ማስታወቂያ',
-  daily_ad_limit: 'የቀን ማስታወቂያ ገደብ',
-  ad_cooldown_seconds: 'በማስታወቂያ መካከል (ሰከንድ)',
-  invite_reward: 'ሳንቲም ለአንድ ጋባዥ',
-  coins_per_birr: 'ሳንቲም በአንድ ብር',
-  min_withdraw_birr: 'ዝቅተኛ ማውጫ (ብር)'
+  coins_per_ad: 'Coins per ad',
+  daily_ad_limit: 'Daily ad limit',
+  ad_cooldown_seconds: 'Seconds between ads',
+  invite_bonus: 'Invite bonus (coins)',
+  coins_per_usdt: 'Coins per 1 USDT',
+  min_withdraw_usdt: 'Min withdraw (USDT)',
+  withdraw_fee_usdt: 'Withdraw fee (USDT)'
 };
 
-async function loadAdmin() {
+async function adminDecide(id, action, buttons) {
+  buttons.forEach((b) => { b.disabled = true; });
+  $('admMsg').className = 'ad-msg';
+  $('admMsg').textContent = action === 'approve' ? 'Sending payment...' : 'Working...';
+
   try {
-    const s = await api('/api/admin/stats');
+    const r = await api('/api/admin/decide', { id, action });
+    $('admMsg').className = 'ad-msg ' + (r.ok ? 'ok' : 'bad');
+    $('admMsg').textContent = r.message || (r.ok ? 'Done.' : 'Failed.');
+  } catch (e) {
+    $('admMsg').className = 'ad-msg bad';
+    $('admMsg').textContent = 'Connection error. Check the request status before retrying.';
+  }
+
+  loadAdmin(true);
+}
+
+async function loadAdmin(keepMsg) {
+  try {
+    const s = await api('/api/admin/overview');
     if (!s.ok) return;
+
+    if (!keepMsg) $('admMsg').textContent = '';
 
     $('admUsers').textContent = s.users;
     $('admBanned').textContent = s.banned;
-    $('admPending').textContent = s.pending;
     $('admCoins').textContent = s.coins.toLocaleString();
+    $('admPaid').textContent = fmt(s.paid_total);
+    $('admWallet').textContent = s.wallet
+      ? `${fmt(s.wallet.usdt)} USDT · ${Number(s.wallet.bnb).toFixed(4)} BNB`
+      : 'not set';
 
+    // requests
+    const wb = $('admWd');
+    wb.textContent = '';
+
+    if (!s.requests.length) wb.appendChild(el('p', 'ad-count', 'No open requests.'));
+
+    s.requests.forEach((r) => {
+      const item = el('div', 'wd-item');
+      const who = r.name ? (/^\w+$/.test(r.name) ? '@' + r.name : r.name) : 'ID ' + r.telegram_id;
+      item.appendChild(el('div', '', `#${r.id} · ${who} · ${fmt(r.net)} USDT (fee ${fmt(r.fee)})`));
+      item.appendChild(el('div', 'ad-count', r.address));
+      if (r.error) item.appendChild(el('div', 'ad-msg bad', r.error));
+
+      const btns = el('div', 'btn-row');
+
+      if (r.status === 'pending') {
+        const ok = el('button', 'mini green', 'Approve & pay');
+        const no = el('button', 'mini red', 'Reject');
+        ok.addEventListener('click', () => adminDecide(r.id, 'approve', [ok, no]));
+        no.addEventListener('click', () => adminDecide(r.id, 'reject', [ok, no]));
+        btns.append(ok, no);
+      } else {
+        const re = el('button', 'mini', 'Re-check');
+        re.addEventListener('click', () => adminDecide(r.id, 'recheck', [re]));
+        btns.appendChild(re);
+        if (r.tx_hash) {
+          const v = el('button', 'mini', 'View tx');
+          v.addEventListener('click', () => openLink('https://bscscan.com/tx/' + r.tx_hash));
+          btns.appendChild(v);
+        }
+      }
+
+      item.appendChild(btns);
+      wb.appendChild(item);
+    });
+
+    // settings
     const box = $('admSettings');
     box.textContent = '';
 
@@ -1100,53 +695,33 @@ async function loadAdmin() {
       row.appendChild(el('span', '', SETTING_LABELS[key]));
       const inp = el('input', 'inp small');
       inp.type = 'number';
+      inp.step = 'any';
       inp.value = s.settings[key];
-      const btn = el('button', 'mini', 'አስቀምጥ');
+      const btn = el('button', 'mini', 'Save');
       btn.addEventListener('click', async () => {
-        const r = await api('/api/admin/settings', { key: key, value: inp.value });
+        const r = await api('/api/admin/settings', { key, value: inp.value });
         btn.textContent = r.ok ? '✓' : '✗';
-        setTimeout(() => { btn.textContent = 'አስቀምጥ'; }, 1200);
+        setTimeout(() => { btn.textContent = 'Save'; }, 1200);
       });
-      row.appendChild(inp);
-      row.appendChild(btn);
+      row.append(inp, btn);
       box.appendChild(row);
     });
-
-    const w = await api('/api/admin/withdrawals');
-    const wb = $('admWd');
-    wb.textContent = '';
-
-    if (!w.ok || !w.rows.length) {
-      wb.appendChild(el('p', 'ad-count', 'የሚጠብቅ ጥያቄ የለም።'));
-      return;
-    }
-
-    w.rows.forEach((r) => {
-      const item = el('div', 'wd-item');
-      item.appendChild(el('div', '', (r.username ? '@' + r.username : 'ID ' + r.telegram_id) + ' · ' + r.amount_birr + ' ብር'));
-      item.appendChild(el('div', 'ad-count', (WD_METHOD[r.method] || r.method) + ' · ' + r.account + ' · ' + r.holder_name));
-      const btns = el('div', 'btn-row');
-      const ok = el('button', 'mini', 'ክፈል');
-      const no = el('button', 'mini red', 'ውድቅ');
-      const act = (action) => async () => {
-        ok.disabled = true; no.disabled = true;
-        await api('/api/admin/withdrawals/resolve', { id: r.id, action: action });
-        loadAdmin();
-      };
-      ok.addEventListener('click', act('paid'));
-      no.addEventListener('click', act('rejected'));
-      btns.appendChild(ok);
-      btns.appendChild(no);
-      item.appendChild(btns);
-      wb.appendChild(item);
-    });
-  } catch (e) {}
+  } catch (e) { /* ignore */ }
 }
 
-authenticate();
+async function banAction(action) {
+  const id = Number($('banId').value.trim());
+  if (!Number.isInteger(id) || id <= 0) { $('admMsg').className = 'ad-msg bad'; $('admMsg').textContent = 'Enter a valid user ID.'; return; }
+  const r = await api('/api/admin/ban', { id, action });
+  $('admMsg').className = 'ad-msg ' + (r.ok ? 'ok' : 'bad');
+  $('admMsg').textContent = r.message || '';
+}
 
+$('banBtn').addEventListener('click', () => banAction('ban'));
+$('unbanBtn').addEventListener('click', () => banAction('unban'));
+
+authenticate();
 </script>
 
 </body>
-
 </html>
