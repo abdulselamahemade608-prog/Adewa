@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="am">
 
 <head>
 
@@ -244,6 +244,100 @@
   .ad-msg.ok  { color: var(--success); }
   .ad-msg.bad { color: var(--danger); }
 
+
+  /* ---------- Tabs + bottom nav ---------- */
+
+  #app { padding-bottom: 84px; }
+
+  .tab { display: none; }
+
+  .tab .ad-card:first-child { margin-top: 0; }
+
+  .nav {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    display: flex;
+    background: var(--card-bg);
+    border-top: 1px solid var(--border);
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .nav button {
+    flex: 1;
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 8px 2px;
+    cursor: pointer;
+  }
+
+  .nav button.active { color: var(--accent); }
+
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    text-align: left;
+  }
+
+  .row:last-child { border-bottom: none; }
+
+  .inp {
+    width: 100%;
+    margin: 6px 0;
+    padding: 11px 12px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 14px;
+  }
+
+  .inp.small { width: 90px; margin: 0; padding: 7px 8px; }
+
+  .mini {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .mini.red { background: var(--danger); }
+
+  .link-box {
+    word-break: break-all;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px;
+    font-size: 12px;
+    margin-bottom: 12px;
+  }
+
+  .btn-row { display: flex; gap: 8px; }
+  .btn-row .ad-btn { flex: 1; }
+
+  .st.pending { color: var(--warning); }
+  .st.paid { color: var(--success); }
+  .st.rejected { color: var(--danger); }
+
+  .wd-item {
+    text-align: left;
+    font-size: 13px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
 </style>
 
 </head>
@@ -257,32 +351,122 @@
     <div class="icon" id="icon" style="display:none;"></div>
   </div>
 
-  <h2 id="title">Checking your account</h2>
-  <p class="desc" id="desc">Please wait a moment...</p>
+  <h2 id="title">መለያዎን በማረጋገጥ ላይ</h2>
+  <p class="desc" id="desc">እባክዎ ትንሽ ይጠብቁ...</p>
 
   <span class="badge" id="badge" style="display:none;"></span>
 
-  <button class="retry-btn" id="retryBtn">Try Again</button>
+  <button class="retry-btn" id="retryBtn">እንደገና ሞክር</button>
 
 </div>
 
 <div id="app">
 
-  <div class="balance-card">
-    <div class="balance-label">Total balance</div>
-    <div class="balance-amount"><span id="balTotal">0</span> coins</div>
-    <div class="balance-split">
-      <div>Ads<b id="balAds">0</b></div>
-      <div>Invite<b id="balInvite">0</b></div>
-      <div>Tasks<b id="balTasks">0</b></div>
+  <div class="tab" id="tab-home">
+
+    <div class="balance-card">
+      <div class="balance-label">ጠቅላላ ቀሪ ሂሳብ</div>
+      <div class="balance-amount"><span id="balTotal">0</span> ሳንቲም</div>
+      <div class="balance-split">
+        <div>ማስታወቂያ<b id="balAds">0</b></div>
+        <div>ግብዣ<b id="balInvite">0</b></div>
+        <div>ተግባር<b id="balTasks">0</b></div>
+      </div>
     </div>
+
+    <div class="ad-card">
+      <h3>እንኳን ደህና መጡ!</h3>
+      <p class="ad-count" style="margin:0">ሳንቲም ለማግኘት «ማግኛ» ን ይጫኑ፤ ጓደኞችን በመጋበዝም ተጨማሪ ያግኙ።</p>
+    </div>
+
   </div>
 
-  <div class="ad-card">
-    <h3>Watch ads</h3>
-    <p class="ad-count" id="adCount">Loading...</p>
-    <button class="ad-btn" id="adBtn" disabled>Watch ad</button>
-    <p class="ad-msg" id="adMsg"></p>
+  <div class="tab" id="tab-earn">
+
+    <div class="ad-card">
+      <h3>ማስታወቂያ ይመልከቱ</h3>
+      <p class="ad-count" id="adCount">በመጫን ላይ...</p>
+      <button class="ad-btn" id="adBtn" disabled>ማስታወቂያ ይመልከቱ</button>
+      <p class="ad-msg" id="adMsg"></p>
+    </div>
+
+  </div>
+
+  <div class="tab" id="tab-invite">
+
+    <div class="ad-card">
+      <h3>ጓደኞችን ይጋብዙ</h3>
+      <p class="ad-count">ለእያንዳንዱ የተረጋገጠ ጓደኛ <b id="invReward">0</b> ሳንቲም ያገኛሉ።</p>
+      <div class="link-box" id="invLink">...</div>
+      <div class="btn-row">
+        <button class="ad-btn" id="invCopy">ቅዳ</button>
+        <button class="ad-btn" id="invShare">አጋራ</button>
+      </div>
+      <p class="ad-msg" id="invMsg"></p>
+    </div>
+
+    <div class="ad-card">
+      <div class="row"><span>የተጋበዙ ጓደኞች</span><b id="invTotal">0</b></div>
+      <div class="row"><span>የተረጋገጡ (ክፍያ የተከፈለባቸው)</span><b id="invDone">0</b></div>
+    </div>
+
+  </div>
+
+  <div class="tab" id="tab-wallet">
+
+    <div class="balance-card">
+      <div class="balance-label">ማውጣት የሚችሉት</div>
+      <div class="balance-amount"><span id="walBirr">0</span> ብር</div>
+      <div class="balance-label"><span id="walCoins">0</span> ሳንቲም · ዝቅተኛ ማውጫ <span id="walMin">0</span> ብር</div>
+    </div>
+
+    <div class="ad-card">
+      <h3>ገንዘብ አውጣ</h3>
+      <select class="inp" id="walMethod">
+        <option value="telebirr">ቴሌብር</option>
+        <option value="cbe">የኢትዮጵያ ንግድ ባንክ (CBE)</option>
+      </select>
+      <input class="inp" id="walAccount" inputmode="numeric" placeholder="ስልክ ቁጥር (09...) ወይም የአካውንት ቁጥር">
+      <input class="inp" id="walName" placeholder="የአካውንት ባለቤት ሙሉ ስም">
+      <button class="ad-btn" id="walBtn">ጥያቄ ላክ</button>
+      <p class="ad-msg" id="walMsg"></p>
+    </div>
+
+    <div class="ad-card">
+      <h3>የቅርብ ጊዜ ጥያቄዎች</h3>
+      <div id="walHistory"></div>
+    </div>
+
+  </div>
+
+  <div class="tab" id="tab-admin">
+
+    <div class="ad-card">
+      <h3>አጠቃላይ መረጃ</h3>
+      <div class="row"><span>ተጠቃሚዎች</span><b id="admUsers">0</b></div>
+      <div class="row"><span>የታገዱ</span><b id="admBanned">0</b></div>
+      <div class="row"><span>የሚጠባበቁ የማውጫ ጥያቄዎች</span><b id="admPending">0</b></div>
+      <div class="row"><span>ጠቅላላ ሳንቲም</span><b id="admCoins">0</b></div>
+    </div>
+
+    <div class="ad-card">
+      <h3>ቅንብሮች</h3>
+      <div id="admSettings"></div>
+    </div>
+
+    <div class="ad-card">
+      <h3>የማውጫ ጥያቄዎች</h3>
+      <div id="admWd"></div>
+    </div>
+
+  </div>
+
+  <div class="nav" id="nav">
+    <button data-tab="home" class="active">መነሻ</button>
+    <button data-tab="earn">ማግኛ</button>
+    <button data-tab="invite">ጋብዝ</button>
+    <button data-tab="wallet">ቦርሳ</button>
+    <button data-tab="admin" id="navAdmin" style="display:none;">አድሚን</button>
   </div>
 
 </div>
@@ -402,26 +586,26 @@ function describeBan(reason) {
   if (r.includes('vpn') || r.includes('proxy') || r.includes('tor')) {
     return {
       icon: 'shield',
-      title: 'Access Blocked',
-      desc: 'A VPN or proxy connection was detected. Please disable it and use a normal network to continue.',
-      badge: 'VPN / PROXY DETECTED'
+      title: 'መዳረሻ ታግዷል',
+      desc: 'ቪፒኤን ወይም ፕሮክሲ ተገኝቷል። እባክዎ ያጥፉት እና መደበኛ ኔትወርክ ይጠቀሙ።',
+      badge: 'ቪፒኤን / ፕሮክሲ ተገኝቷል'
     };
   }
 
   if (r.includes('multiple') || r.includes('same device') || r.includes('same ip')) {
     return {
       icon: 'users',
-      title: 'Access Blocked',
-      desc: 'Multiple Telegram accounts were detected from this device or network. Only one account is allowed.',
-      badge: 'MULTIPLE ACCOUNTS DETECTED'
+      title: 'መዳረሻ ታግዷል',
+      desc: 'ከዚህ መሳሪያ ወይም ኔትወርክ ብዙ የቴሌግራም አካውንቶች ተገኝተዋል። አንድ አካውንት ብቻ ይፈቀዳል።',
+      badge: 'ብዙ አካውንቶች ተገኝተዋል'
     };
   }
 
   return {
     icon: 'shield',
-    title: 'Account Banned',
-    desc: 'Your account has been permanently banned from Adewa.',
-    badge: 'BANNED'
+    title: 'አካውንት ታግዷል',
+    desc: 'አካውንትዎ ከአዴዋ ለዘላለም ታግዷል።',
+    badge: 'ታግዷል'
   };
 }
 
@@ -453,16 +637,16 @@ AUTHENTICATE
 async function authenticate() {
 
   setState('loading', {
-    title: 'Checking your account',
-    desc: 'Please wait a moment...'
+    title: 'መለያዎን በማረጋገጥ ላይ',
+    desc: 'እባክዎ ትንሽ ይጠብቁ...'
   });
 
   if (!hasTelegram) {
 
     setState('warning', {
       icon: 'warning',
-      title: 'Open in Telegram',
-      desc: 'This page must be opened as a Telegram Mini App, not in a regular browser.'
+      title: 'በቴሌግራም ይክፈቱ',
+      desc: 'ይህ ገጽ እንደ ቴሌግራም ሚኒ አፕ መከፈት አለበት፤ በተለመደው ብሮውዘር አይሰራም።'
     });
 
     return;
@@ -474,8 +658,8 @@ async function authenticate() {
 
     setState('warning', {
       icon: 'warning',
-      title: 'Open in Telegram',
-      desc: 'This app must be opened from inside Telegram.',
+      title: 'በቴሌግራም ይክፈቱ',
+      desc: 'ይህ አፕ ከቴሌግራም ውስጥ መከፈት አለበት።',
     });
 
     return;
@@ -519,8 +703,8 @@ async function authenticate() {
 
       setState('success', {
         icon: 'check',
-        title: 'Verified',
-        desc: 'Security check passed successfully.'
+        title: 'ተረጋግጧል',
+        desc: 'የደህንነት ማረጋገጫ በተሳካ ሁኔታ ተጠናቋል።'
       });
 
       setTimeout(() => {
@@ -536,8 +720,8 @@ async function authenticate() {
 
     setState('error', {
       icon: 'xCircle',
-      title: 'Verification Failed',
-      desc: data.message || 'Something went wrong. Please try again.'
+      title: 'ማረጋገጥ አልተሳካም',
+      desc: data.message || 'የሆነ ችግር ተፈጥሯል። እባክዎ እንደገና ይሞክሩ።'
     });
 
   } catch (error) {
@@ -548,7 +732,7 @@ async function authenticate() {
 
     setState('error', {
       icon: 'wifiOff',
-      title: timedOut ? 'Connection Timed Out' : 'Connection Error',
+      title: timedOut ? 'ግንኙነቱ ጊዜው አልፏል' : 'የግንኙነት ስህተት',
       desc: error.name + ': ' + error.message + ' | ' + API_BASE
     });
   }
@@ -617,7 +801,7 @@ function renderEarn() {
 
   adEls.count.textContent =
     s.ads_today + ' / ' + s.daily_ad_limit +
-    ' ads today  ·  +' + s.coins_per_ad + ' coins each';
+    ' ማስታወቂያ ዛሬ  ·  +' + s.coins_per_ad + ' ሳንቲም በእያንዳንዱ';
 
   clearInterval(earn.timer);
 
@@ -625,7 +809,7 @@ function renderEarn() {
 
   if (limitReached) {
     adEls.btn.disabled = true;
-    adEls.btn.textContent = 'Daily limit reached';
+    adEls.btn.textContent = 'የዛሬ ገደብ ተሞልቷል';
     return;
   }
 
@@ -633,7 +817,7 @@ function renderEarn() {
 
     let left = s.cooldown_left;
     adEls.btn.disabled = true;
-    adEls.btn.textContent = 'Next ad in ' + left + 's';
+    adEls.btn.textContent = 'ቀጣይ ማስታወቂያ በ ' + left + 's';
 
     earn.timer = setInterval(() => {
       left--;
@@ -643,14 +827,14 @@ function renderEarn() {
         renderEarn();
         return;
       }
-      adEls.btn.textContent = 'Next ad in ' + left + 's';
+      adEls.btn.textContent = 'ቀጣይ ማስታወቂያ በ ' + left + 's';
     }, 1000);
 
     return;
   }
 
   adEls.btn.disabled = earn.busy;
-  adEls.btn.textContent = 'Watch ad';
+  adEls.btn.textContent = 'ማስታወቂያ ይመልከቱ';
 }
 
 async function showApp() {
@@ -663,11 +847,13 @@ async function showApp() {
     if (data.ok) {
       earn.state = data.state;
       renderEarn();
+      if (data.is_admin) document.getElementById('navAdmin').style.display = '';
+      showTab('home');
     } else {
-      adEls.count.textContent = data.message || 'Could not load balance.';
+      adEls.count.textContent = data.message || 'ቀሪ ሂሳብ መጫን አልተቻለም።';
     }
   } catch (e) {
-    adEls.count.textContent = 'Could not reach the server.';
+    adEls.count.textContent = 'ሰርቨሩን ማግኘት አልተቻለም።';
   }
 }
 
@@ -712,19 +898,19 @@ async function watchAd() {
 
     if (!start.ok) {
       if (start.state) earn.state = start.state;
-      setAdMsg(start.message || 'Cannot start ad.', 'bad');
+      setAdMsg(start.message || 'ማስታወቂያ መጀመር አልተቻለም።', 'bad');
       return;
     }
 
     const ad = await showAdWaterfall();
 
     if (ad.unavailable) {
-      setAdMsg('No ad available right now. Try again soon.', 'bad');
+      setAdMsg('አሁን ማስታወቂያ የለም። ትንሽ ቆይተው ይሞክሩ።', 'bad');
       return;
     }
 
     if (!ad.done) {
-      setAdMsg('Watch the full ad to get the reward.', 'bad');
+      setAdMsg('ሽልማቱን ለማግኘት ማስታወቂያውን ሙሉ ይመልከቱ።', 'bad');
       return;
     }
 
@@ -735,15 +921,15 @@ async function watchAd() {
 
     if (claim.ok) {
       earn.state = claim.state;
-      setAdMsg('+' + claim.reward + ' coins added', 'ok');
+      setAdMsg('+' + claim.reward + ' ሳንቲም ተጨምሯል', 'ok');
     } else {
-      setAdMsg(claim.message || 'Reward failed.', 'bad');
+      setAdMsg(claim.message || 'ሽልማት አልተሰጠም።', 'bad');
     }
 
   } catch (e) {
 
     console.error(e);
-    setAdMsg('Connection error. Try again.', 'bad');
+    setAdMsg('የግንኙነት ስህተት። እንደገና ይሞክሩ።', 'bad');
 
   } finally {
 
@@ -755,6 +941,207 @@ async function watchAd() {
 adEls.btn.addEventListener('click', watchAd);
 
 els.retryBtn.addEventListener('click', authenticate);
+
+
+/*
+=========================================================
+TABS: HOME / EARN / INVITE / WALLET / ADMIN
+=========================================================
+*/
+
+const $ = (id) => document.getElementById(id);
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function showTab(name) {
+
+  document.querySelectorAll('.tab').forEach((t) => {
+    t.style.display = (t.id === 'tab-' + name) ? 'block' : 'none';
+  });
+
+  document.querySelectorAll('#nav button').forEach((b) => {
+    b.classList.toggle('active', b.dataset.tab === name);
+  });
+
+  if (name === 'invite') loadInvite();
+  if (name === 'wallet') loadWallet();
+  if (name === 'admin') loadAdmin();
+}
+
+document.querySelectorAll('#nav button').forEach((b) => {
+  b.addEventListener('click', () => showTab(b.dataset.tab));
+});
+
+async function refreshBalance() {
+  const d = await api('/api/me');
+  if (d.ok) {
+    earn.state = d.state;
+    renderEarn();
+  }
+}
+
+/* ---------- Invite ---------- */
+
+let inviteLink = '';
+
+async function loadInvite() {
+  try {
+    const d = await api('/api/invite');
+    if (!d.ok) { $('invMsg').textContent = d.message || ''; return; }
+    inviteLink = d.link;
+    $('invLink').textContent = d.link;
+    $('invTotal').textContent = d.total;
+    $('invDone').textContent = d.done;
+    $('invReward').textContent = d.reward;
+  } catch (e) {
+    $('invMsg').textContent = 'የግንኙነት ስህተት።';
+  }
+}
+
+$('invCopy').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(inviteLink);
+    $('invMsg').textContent = 'ተቀድቷል ✓';
+  } catch (e) {
+    $('invMsg').textContent = inviteLink;
+  }
+});
+
+$('invShare').addEventListener('click', () => {
+  if (!inviteLink) return;
+  const url = 'https://t.me/share/url?url=' + encodeURIComponent(inviteLink) +
+    '&text=' + encodeURIComponent('አዴዋን ተቀላቀሉ እና ገንዘብ ያግኙ!');
+  tg.openTelegramLink(url);
+});
+
+/* ---------- Wallet ---------- */
+
+const WD_STATUS = { pending: 'በመጠበቅ ላይ', paid: 'ተከፍሏል', rejected: 'ውድቅ' };
+const WD_METHOD = { telebirr: 'ቴሌብር', cbe: 'ንግድ ባንክ' };
+
+async function loadWallet() {
+  try {
+    const d = await api('/api/wallet');
+    if (!d.ok) return;
+    $('walBirr').textContent = d.birr;
+    $('walCoins').textContent = d.coins.toLocaleString();
+    $('walMin').textContent = d.min_birr;
+    const box = $('walHistory');
+    box.textContent = '';
+    if (!d.history.length) box.appendChild(el('p', 'ad-count', 'ምንም ጥያቄ የለም።'));
+    d.history.forEach((w) => {
+      const row = el('div', 'row');
+      row.appendChild(el('span', '', w.amount_birr + ' ብር · ' + (WD_METHOD[w.method] || w.method)));
+      row.appendChild(el('b', 'st ' + w.status, WD_STATUS[w.status] || w.status));
+      box.appendChild(row);
+    });
+  } catch (e) {}
+}
+
+$('walBtn').addEventListener('click', async () => {
+  const msg = $('walMsg');
+  msg.className = 'ad-msg';
+  msg.textContent = '';
+  $('walBtn').disabled = true;
+  try {
+    const d = await api('/api/withdraw', {
+      method: $('walMethod').value,
+      account: $('walAccount').value,
+      name: $('walName').value
+    });
+    if (d.ok) {
+      msg.className = 'ad-msg ok';
+      msg.textContent = 'ጥያቄዎ ተልኳል።';
+      await refreshBalance();
+      loadWallet();
+    } else {
+      msg.className = 'ad-msg bad';
+      msg.textContent = d.message || 'አልተሳካም።';
+    }
+  } catch (e) {
+    msg.className = 'ad-msg bad';
+    msg.textContent = 'የግንኙነት ስህተት።';
+  } finally {
+    $('walBtn').disabled = false;
+  }
+});
+
+/* ---------- Admin ---------- */
+
+const SETTING_LABELS = {
+  coins_per_ad: 'ሳንቲም በአንድ ማስታወቂያ',
+  daily_ad_limit: 'የቀን ማስታወቂያ ገደብ',
+  ad_cooldown_seconds: 'በማስታወቂያ መካከል (ሰከንድ)',
+  invite_reward: 'ሳንቲም ለአንድ ጋባዥ',
+  coins_per_birr: 'ሳንቲም በአንድ ብር',
+  min_withdraw_birr: 'ዝቅተኛ ማውጫ (ብር)'
+};
+
+async function loadAdmin() {
+  try {
+    const s = await api('/api/admin/stats');
+    if (!s.ok) return;
+
+    $('admUsers').textContent = s.users;
+    $('admBanned').textContent = s.banned;
+    $('admPending').textContent = s.pending;
+    $('admCoins').textContent = s.coins.toLocaleString();
+
+    const box = $('admSettings');
+    box.textContent = '';
+
+    Object.keys(SETTING_LABELS).forEach((key) => {
+      const row = el('div', 'row');
+      row.appendChild(el('span', '', SETTING_LABELS[key]));
+      const inp = el('input', 'inp small');
+      inp.type = 'number';
+      inp.value = s.settings[key];
+      const btn = el('button', 'mini', 'አስቀምጥ');
+      btn.addEventListener('click', async () => {
+        const r = await api('/api/admin/settings', { key: key, value: inp.value });
+        btn.textContent = r.ok ? '✓' : '✗';
+        setTimeout(() => { btn.textContent = 'አስቀምጥ'; }, 1200);
+      });
+      row.appendChild(inp);
+      row.appendChild(btn);
+      box.appendChild(row);
+    });
+
+    const w = await api('/api/admin/withdrawals');
+    const wb = $('admWd');
+    wb.textContent = '';
+
+    if (!w.ok || !w.rows.length) {
+      wb.appendChild(el('p', 'ad-count', 'የሚጠብቅ ጥያቄ የለም።'));
+      return;
+    }
+
+    w.rows.forEach((r) => {
+      const item = el('div', 'wd-item');
+      item.appendChild(el('div', '', (r.username ? '@' + r.username : 'ID ' + r.telegram_id) + ' · ' + r.amount_birr + ' ብር'));
+      item.appendChild(el('div', 'ad-count', (WD_METHOD[r.method] || r.method) + ' · ' + r.account + ' · ' + r.holder_name));
+      const btns = el('div', 'btn-row');
+      const ok = el('button', 'mini', 'ክፈል');
+      const no = el('button', 'mini red', 'ውድቅ');
+      const act = (action) => async () => {
+        ok.disabled = true; no.disabled = true;
+        await api('/api/admin/withdrawals/resolve', { id: r.id, action: action });
+        loadAdmin();
+      };
+      ok.addEventListener('click', act('paid'));
+      no.addEventListener('click', act('rejected'));
+      btns.appendChild(ok);
+      btns.appendChild(no);
+      item.appendChild(btns);
+      wb.appendChild(item);
+    });
+  } catch (e) {}
+}
 
 authenticate();
 
