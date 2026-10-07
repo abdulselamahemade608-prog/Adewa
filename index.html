@@ -1461,7 +1461,7 @@ if(tg){
   }catch(e){}
 }
 
-const API = 'https://adewa-backend-8vrm.vercel.app';
+const API = 'https://backend-rho-tan-62.vercel.app';
 
 const ADSGRAM_BLOCK_ID = '50476';
 
@@ -1614,7 +1614,7 @@ const I18N = {
   tab_earn:'Earn',
   tab_spin:'Spin',
   tab_invite:'Invite',
-  tab_wallet:'Wallet',
+  tab_wallet:'Profile',
   tab_admin:'Admin',
 
   balance:'Balance',
@@ -2815,9 +2815,8 @@ function drawNav(){
 
     ['home','home',t('tab_home')],
     ['earn','tasks',t('tab_earn')],
-    ['spin','spin',t('tab_spin')],
     ['invite','users',t('tab_invite')],
-    ['wallet','wallet',t('tab_wallet')]
+    ['wallet','users','Profile']
 
   ];
 
@@ -2863,6 +2862,15 @@ async function go(tab){
   );
 
   try{
+
+    if(tab === 'home'){
+
+      const lb = await api('/api/leaderboard');
+      INVITERS = lb.inviters || [];
+      EARNERS = lb.earners || [];
+      TASKS = (await api('/api/tasks')).tasks;
+
+    }
 
     if(tab === 'earn'){
 
@@ -2965,141 +2973,80 @@ function vHome(){
   const u = ME.user;
   const c = ME.cfg;
   const st = u.state;
+  const initial = esc((u.name || '?').trim().charAt(0).toUpperCase());
 
-  const pct =
-    Math.min(
-      100,
-      ((u.streak % 7) / 7) * 100 ||
-      (u.streak > 0 && u.streak % 7 === 0 ? 100 : 0)
-    );
+  const checkBtn = st === 'done'
+    ? `<button class="btn ghost sm" disabled>${ic('check','sm')} ${t('checked_in_today')}</button>`
+    : `<button class="btn sm" onclick="showInterstitialAd();checkin(${st === 'recoverable'})">
+         ${ic('flame','sm')} ${st === 'lost' || st === 'new' || st === 'recoverable' ? t('start_streak') : t('check_in')}
+       </button>`;
 
-  let action;
-
-  if(st === 'done'){
-    action = `
-      <button class="btn ghost" disabled>
-        ${ic('check')}
-        ${t('checked_in_today')}
-      </button>`;
-  }else if(st === 'recoverable'){
-    action = `
-      <p class="muted" style="margin-bottom:10px">
-        You missed a day. Save your ${u.streak}-day streak
-        for ${c.freeze_price} coins, or start over.
-      </p>
-      <div class="grid2" style="gap:10px">
-        <button class="btn" onclick="showInterstitialAd();freeze()">
-          ${ic('shield')} Save streak
-        </button>
-        <button class="btn ghost" onclick="showInterstitialAd();checkin(true)">
-          Start over
-        </button>
-      </div>`;
-  }else{
-    action = `
-      <button class="btn" onclick="showInterstitialAd();checkin()">
-        ${ic('flame')}
-        ${st === 'lost' || st === 'new' ? t('start_streak') : t('check_in')}
-      </button>`;
-  }
-
-  const days = [];
-  for(let i=6;i>=0;i--){
-    const d = new Date();
-    d.setDate(d.getDate()-i);
-    const key = d.toISOString().slice(0,10);
-    days.push({
-      key,
-      label:d.toLocaleDateString(undefined,{weekday:'short'}).slice(0,3),
-      day:d.getDate(),
-      done:CAL.includes(key)
-    });
-  }
+  const board = (title, rows, valFn) => `
+    <h2>${title}</h2>
+    <div class="card" style="padding:6px 14px">
+      ${rows.length ? rows.slice(0,10).map((r,i)=>`
+        <div class="row between" style="padding:10px 0;${i?'border-top:1px solid var(--line)':''}">
+          <div class="row">
+            <span class="pill ${i<3?'':'ok'}" style="min-width:30px;text-align:center">${i<3?['🥇','🥈','🥉'][i]:i+1}</span>
+            <span>${esc(r.name || 'User')}</span>
+          </div>
+          <b>${valFn(r)}</b>
+        </div>`).join('') : '<p class="muted" style="padding:10px 0">No data yet.</p>'}
+    </div>`;
 
   return `
     <div class="card hero">
-      <div class="row between">
-        <div class="muted">${t('balance')}</div>
-      </div>
-
-      <div class="amt">${fmt(u.coins)}<small>coins</small></div>
-      <div class="etb">${etb(u.coins)} ETB · 100 coins = 1 ETB</div>
-
-      <div class="grid2" style="margin-top:14px">
-        <div>
-          <div class="muted">Invite coins</div>
-          <b>${fmt(u.invite_coins || 0)}</b>
-        </div>
-        <div>
-          <div class="muted">Ad coins</div>
-          <b>${fmt(u.ads_coins || 0)}</b>
-        </div>
-      </div>
-
-      <div class="grid2" style="margin-top:10px">
-        <div>
-          <div class="muted">Task coins</div>
-          <b>${fmt(u.task_coins || 0)}</b>
-        </div>
-        <div>
-          <div class="muted">Other coins</div>
-          <b>${fmt(u.bonus_coins || 0)}</b>
-        </div>
-      </div>
-
-      ${c.vip ? `
-        <span class="badge b3" style="margin-top:10px;display:inline-flex;align-items:center;gap:6px">
-          ${cico('star',16)} ${t('vip_unlimited')}
-        </span>` : ''}
-    </div>
-
-    <div class="card">
-      <div class="row" style="margin-bottom:4px">
-        <div class="flame">${ic('flame')}</div>
+      <div class="row">
+        <div class="flame" style="font-weight:800;font-size:20px;display:flex;align-items:center;justify-content:center">${initial}</div>
         <div class="grow">
-          <div style="font-weight:700;font-size:17px">${u.streak}-day streak</div>
-          <div class="muted">Best: ${u.best} days</div>
+          <div style="font-weight:750;font-size:17px">${esc(u.name || 'User')}</div>
+          <div class="muted">ID: ${u.id}</div>
         </div>
         <span class="badge b${u.level}">${LEVELS[u.level - 1] || 'Gold'}</span>
       </div>
 
-      <div class="bar"><i style="width:${pct}%"></i></div>
-      <p class="muted" style="margin-bottom:14px">
-        ${u.level >= c.levels.length
-          ? 'Top level reached.'
-          : `Check in 7 days in a row to reach ${LEVELS[u.level]} and earn ${c.milestone_bonus} bonus coins.`}
-      </p>
-      ${action}
+      <div class="muted" style="margin-top:16px">${t('balance')}</div>
+      <div class="amt">${fmt(u.coins)}<small>coins</small></div>
+      <div class="etb">${etb(u.coins)} ETB</div>
 
-      <div style="margin-top:18px">
-        <div class="row between">
-          <b>Daily check-in</b>
-          <span class="muted">${u.streak} days</span>
-        </div>
-        <div class="grid2" style="grid-template-columns:repeat(7,1fr);gap:6px;margin-top:10px">
-          ${days.map(x=>`
-            <div style="text-align:center;padding:7px 2px;border-radius:12px;border:1px solid var(--line);background:${x.done?'rgba(53,212,154,.12)':'rgba(255,255,255,.03)'}">
-              <div class="muted" style="font-size:10px">${x.label}</div>
-              <b style="font-size:13px">${x.day}</b>
-              <div style="font-size:11px">${x.done?cico('check',14):'·'}</div>
-            </div>
-          `).join('')}
-        </div>
+      <div class="row between" style="margin-top:14px">
+        <span class="muted">${ic('flame','sm')} ${u.streak}-day streak</span>
+        ${checkBtn}
       </div>
     </div>
 
-    <div class="grid2">
+    <div class="card" onclick="go('earn')">
+      <div class="row between">
+        <div>
+          <div class="muted">${ic('play')} Earn watch ads</div>
+          <div style="font-size:24px;font-weight:750;margin-top:6px">
+            ${c.ads_limit === null ? c.ads_today + '/∞' : c.ads_today + '/' + c.ads_limit}
+            <small class="muted" style="font-size:13px;font-weight:500">ads today</small>
+          </div>
+        </div>
+        <button class="btn sm">Watch</button>
+      </div>
+    </div>
+
+    <h2>Tasks</h2>
+    ${TASKS.length ? TASKS.slice(0,5).map(x=>`
       <div class="card" onclick="go('earn')">
-        <div class="row muted">${ic('play')}${t('ads_today')}</div>
-        <div style="font-size:24px;font-weight:750;margin-top:6px">
-          ${c.ads_limit === null ? c.ads_today + '/∞' : c.ads_today + '/' + c.ads_limit}
+        <div class="row between">
+          <div class="grow">${esc(x.title)}</div>
+          <span class="pill ok">+${x.reward} coins</span>
         </div>
-      </div>
-      <div class="card" onclick="go('spin')">
-        <div class="row muted">${ic('spin')}${t('free_spins')}</div>
-        <div style="font-size:24px;font-weight:750;margin-top:6px">${c.spin.free_left}</div>
-      </div>
+      </div>`).join('') : '<div class="card muted">No tasks right now.</div>'}
+
+    <h2>Invite friends</h2>
+    <div class="card">
+      <p class="muted" style="margin-bottom:12px">
+        Earn ${c.invite_total != null ? c.invite_total : c.referral_reward} coins for every friend who joins.
+      </p>
+      <button class="btn" onclick="showInterstitialAd();copyRef()">${ic('copy')} ${t('copy_invite_link')}</button>
     </div>
+
+    ${board('🏆 Top 10 Earners', EARNERS, r=>fmt(Number(r.total_earned_etb))+' ETB')}
+    ${board('👥 Top 10 Referrals', INVITERS, r=>r.invites+' invites')}
   `;
 }
 
@@ -3150,57 +3097,6 @@ async function checkin(restart){
       );
 
     }
-
-  }
-
-  busy = false;
-
-}
-
-async function freeze(){
-
-  if(busy) return;
-
-  busy = true;
-
-  try{
-
-    await api(
-      '/api/streak/freeze',
-      {}
-    );
-
-    await api(
-      '/api/checkin',
-      {}
-    );
-
-    haptic();
-
-    toast(
-      'Streak saved'
-    );
-
-    await loadMe();
-
-    render();
-
-  }catch(e){
-
-    if(
-      e.code !== 'gate'
-    ){
-
-      toast(
-        errMsg(e)
-      );
-
-    }
-
-    await loadMe()
-      .catch(()=>{});
-
-    render();
 
   }
 
@@ -4468,6 +4364,16 @@ function vWallet(){
     (w.invite_enabled ? Number(u.invite_coins || 0) : 0);
 
   return `
+    <div class="card">
+      <div class="row">
+        <div class="flame" style="font-weight:800;font-size:20px;display:flex;align-items:center;justify-content:center">${esc((u.name||'?').trim().charAt(0).toUpperCase())}</div>
+        <div class="grow">
+          <div style="font-weight:750;font-size:17px">${esc(u.name || 'User')}</div>
+          <div class="muted">ID: ${u.id}</div>
+        </div>
+      </div>
+    </div>
+
     <div class="card hero">
       <div class="muted">Available</div>
       <div class="amt">${etb(u.coins)}<small>ETB</small></div>
@@ -4785,9 +4691,6 @@ const SET_LABELS = {
   milestone_bonus:
     'Level-up bonus (coins)',
 
-  freeze_price:
-    'Streak save price (coins)',
-
   free_spins:
     'Free spins per day',
 
@@ -4835,9 +4738,6 @@ const SET_LABELS = {
 
   weekly_top_inviter_bonus_etb:
     'Top-inviter weekly bonus (ETB)',
-
-  anticheat_ip_check:
-    'Flag accounts sharing an IP (true/false)',
 
   channel_rewards:
     'Per-channel referral reward, e.g. {"@chan1":20,"@chan2":10}',
@@ -5028,11 +4928,6 @@ function vAdmin(){
         class="muted"
         style="margin-top:8px"
       >
-        Flagged accounts:
-        ${s.flagged}
-
-        ·
-
         Task proofs waiting:
         ${s.pending_tasks}
       </p>
@@ -5292,15 +5187,12 @@ function vAdmin(){
 
     <h2>Account tools</h2>
     <div class="card">
-      <p class="muted">Enter a Telegram user ID to unflag ("Your account is under review"), flag, ban or unban an account.</p>
+      <p class="muted">Enter a Telegram user ID to ban or unban an account.</p>
       <input id="au_id" inputmode="numeric" placeholder="User ID, e.g. 7975950709">
       <div class="grid2" style="margin-top:10px">
-        <button class="btn" onclick="userAct('unflag')">Unflag</button>
-        <button class="btn" onclick="userAct('flag')">Flag</button>
         <button class="btn" onclick="userAct('unban')">Unban</button>
         <button class="btn" onclick="userAct('ban')">Ban</button>
       </div>
-      <button class="btn" style="margin-top:10px" onclick="userAct('unflag_all')">Unflag everyone</button>
     </div>
 
     <h2>Broadcast message</h2>
