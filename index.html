@@ -2662,7 +2662,7 @@ async function api(path,body){
         {
           code:j.error,
           data:j,
-          dbg:(body ? 'POST ' : 'GET ') + path + ' -> HTTP ' + r.status + (j.error ? ' ' + j.error : ' (no JSON body)')
+          dbg:(body ? 'POST ' : 'GET ') + path + ' -> HTTP ' + r.status + (j.error ? ' ' + j.error : ' (no JSON body)') + (j.detail ? ' | ' + j.detail : '')
         }
       );
 
