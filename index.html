@@ -2661,7 +2661,8 @@ async function api(path,body){
         new Error(j.error || 'server'),
         {
           code:j.error,
-          data:j
+          data:j,
+          dbg:(body ? 'POST ' : 'GET ') + path + ' -> HTTP ' + r.status + (j.error ? ' ' + j.error : ' (no JSON body)')
         }
       );
 
@@ -2725,7 +2726,7 @@ function fatal(msg){
       class="muted"
       style="margin:10px 0 20px"
     >
-      ${esc(msg)}
+      <span style="white-space:pre-line">${esc(msg)}</span>
     </p>
 
     <button
@@ -3552,7 +3553,9 @@ async function boot(){
     ){
 
       fatal(
-        errMsg(e)
+        errMsg(e) +
+        (e && e.dbg ? '\n[' + e.dbg + ']' : '') +
+        (e && !e.dbg && e.message ? '\n[' + e.message + ' @ ' + API + ']' : '')
       );
 
     }
